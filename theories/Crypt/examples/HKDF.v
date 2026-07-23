@@ -291,6 +291,35 @@ Section HKDF_example.
     | eapply preserve_update_mem_rel; ssprove_invariant
     ] ; done.
 
+  (* [r_ret]'s postcondition hypothesis packs the base invariant under a
+    chain of [rem_lhs]/[rem_rhs] wrappers, one per [get] remembered so far
+    on the way to this point -- the exact nesting depth varies by branch,
+    so peel wrappers one at a time (via [destruct]'s whnf reduction on
+    [⋊], same trick as elsewhere in this file) until what's left matches
+    the target invariant exactly, instead of hand-counting brackets. *)
+  Ltac extract_base_inv h :=
+    first [ exact h | destruct h as [h ?]; extract_base_inv h ].
+
+  (* Like [close_preserve], but for a 3-way [(A ⋊ B) ⋊ C] invariant. *)
+  Ltac close_preserve3 :=
+    eapply preserve_update_mem_conj;
+    [ eapply preserve_update_mem_conj;
+      [ ssprove_invariant
+      | eapply preserve_update_mem_rel; ssprove_invariant ]
+    | eapply preserve_update_mem_rel; ssprove_invariant
+    ] ; done.
+
+  (* Like [close_preserve3], but for a 4-way [((A ⋊ B) ⋊ C) ⋊ D] invariant. *)
+  Ltac close_preserve4 :=
+    eapply preserve_update_mem_conj;
+    [ eapply preserve_update_mem_conj;
+      [ eapply preserve_update_mem_conj;
+        [ ssprove_invariant
+        | eapply preserve_update_mem_rel; ssprove_invariant ]
+      | eapply preserve_update_mem_rel; ssprove_invariant ]
+    | eapply preserve_update_mem_rel; ssprove_invariant
+    ] ; done.
+
   Lemma KDF_bad_KDF_ideal_equiv :
     KDF_bad ≈₀ KDF_ideal.
   Proof.
@@ -356,21 +385,375 @@ Section HKDF_example.
 
   Local Open Scope ring_scope.
 
-  (* The advantage of distinguishing [PRF _ k] (for a single, uniformly
-     random, hidden key [k]) from an independent uniformly random function.
-     Negligible by assumption; reused per hybrid step below. *)
-  Definition prf_epsilon (A : raw_package) : R :=
-    (* placeholder: same shape as [PRF.v]'s / [PRFPRG.v]'s [prf_epsilon],
-       i.e. [Advantage EVAL A] for the appropriate single-key [EVAL] game
-       built from [PRF]. Left abstract here until the hybrid reduction
-       package (item 1 in the roadmap above) is written. *)
-    0.
+  (* --- single-key PRF assumption, spent one hybrid step at a time ---
+
+    [EVAL_OP] mirrors [PRF.v]/[PRFPRG.v]'s own [EVAL]: a single, uniformly
+    random, hidden key [k] is either sampled once and used for every query
+    ([EVAL_pkg_tt], i.e. "real"), or replaced by an independent lazily
+    sampled random function ([EVAL_pkg_ff], i.e. "ideal"). [prf_epsilon]
+    is the adversary's advantage in telling those two apart -- negligible
+    by the security of [PRF], and the sole per-step cost of the hybrid
+    argument below.
+  *)
+
+  Definition EVAL_OP : nat := 1.
+
+  Definition EVAL_export := [interface #val #[ EVAL_OP ] : 'info → 'out ].
+
+  Definition eval_key_loc := mkloc 7 (None : option 'prk).
+  Definition eval_tbl_loc := mkloc 8 (emptym : chMap 'info 'out).
+
+  Definition EVAL_pkg_tt : package [interface] EVAL_export :=
+    [package [fmap eval_key_loc] ;
+      #def #[ EVAL_OP ] (info : 'info) : 'out
+      {
+        k ← get eval_key_loc ;;
+        match k with
+        | Some k => ret (PRF info k)
+        | None =>
+            k ← sample uniform PRK_N ;;
+            #put eval_key_loc := Some k ;;
+            ret (PRF info k)
+        end
+      }
+    ].
+
+  Definition EVAL_pkg_ff : package [interface] EVAL_export :=
+    [package [fmap eval_tbl_loc] ;
+      #def #[ EVAL_OP ] (info : 'info) : 'out
+      {
+        T ← get eval_tbl_loc ;;
+        match getm T info with
+        | Some y => ret y
+        | None =>
+            y <$ uniform Out_N ;;
+            #put eval_tbl_loc := setm T info y ;;
+            ret y
+        end
+      }
+    ].
+
+  Definition EVAL b : game EVAL_export := if b then EVAL_pkg_tt else EVAL_pkg_ff.
+
+  Definition prf_epsilon (A : raw_package) : R := Advantage EVAL A.
+
+  (* --- hybrid family, indexed by "number of *distinct* [prk]'s treated
+    as ideal so far" ---
+
+    [KDF_hyb i]: the first [i] distinct [prk] values Extract has ever
+    handed out get an ideal (random-function) Expand via [mid_loc]; every
+    [prk] discovered after that gets the real [PRF]. Distinct [prk]'s are
+    numbered by order of first appearance ([prk_index_loc] /
+    [prk_count_loc]), so this is well-defined for an adaptive adversary
+    exactly like [GEN_HYB_pkg] in PRFPRG.v (indexed there by raw query
+    count instead of by distinct-key count).
+
+    [KDF_hyb 0] is exactly [KDF_real]: no [prk] ever has index < 0, so
+    every query takes the real-PRF branch. For any [i] at least the
+    number of distinct shared secrets ever queried, [KDF_hyb i] is
+    exactly [KDF_mid]: every [prk] has index < i, so every query takes the
+    ideal branch. Crucially, swapping *one* [prk]'s Expand from real to
+    ideal never needs the birthday assumption: [KDF_real] and [KDF_mid]
+    already agree on what to do with a *repeated* [prk] (both are pure
+    functions of [prk] alone), so nothing here depends on distinct shared
+    secrets staying collision-free -- that concern only arises when
+    comparing against [KDF_ideal] (step 2).
+  *)
+
+  Definition prk_count_loc := mkloc 9 (0 : nat).
+  Definition prk_index_loc := mkloc 10 (emptym : chMap 'prk 'nat).
+
+  Definition KDF_hyb_locs :=
+    [fmap extract_loc; mid_loc; prk_count_loc; prk_index_loc].
+
+  (* Extract [ss]'s [prk], and the order in which that [prk] was first
+    discovered (assigning it a fresh, incrementing index the first time
+    it is ever seen). Shared, unchanged, between [KDF_hyb] and
+    [KDF_hyb_EVAL] below -- exactly the [kgen]-style shared fragment
+    pattern used in PRF.v / PRFMAC.v / PRFPRG.v. *)
+  Definition get_prk_idx (ss : 'ss) : raw_code ('prk × 'nat) :=
+    T ← get extract_loc ;;
+    prk ← match getm T ss with
+    | Some prk => ret prk
+    | None =>
+        prk <$ uniform PRK_N ;;
+        #put extract_loc := setm T ss prk ;;
+        ret prk
+    end ;;
+    PIdx ← get prk_index_loc ;;
+    idx ← match getm PIdx prk with
+    | Some idx => ret idx
+    | None =>
+        cnt ← get prk_count_loc ;;
+        #put prk_count_loc := cnt.+1 ;;
+        #put prk_index_loc := setm PIdx prk cnt ;;
+        ret cnt
+    end ;;
+    ret (prk, idx).
+
+  Lemma get_prk_idx_valid {L I} (ss : 'ss) :
+    fhas L extract_loc -> fhas L prk_index_loc -> fhas L prk_count_loc ->
+    ValidCode L I (get_prk_idx ss).
+  Proof.
+    move=> H1 H2 H3.
+    rewrite /get_prk_idx.
+    apply: valid_getr => [// | T].
+    case: (getm T ss) => [prk|].
+    - apply: valid_getr => [// | PIdx].
+      case: (getm PIdx prk) => [idx|].
+      + by apply: valid_ret.
+      + apply: valid_getr => [// | cnt].
+        apply: valid_putr => //.
+        apply: valid_putr => //.
+        by apply: valid_ret.
+    - apply: valid_sampler => prk.
+      apply: valid_putr => //.
+      apply: valid_getr => [// | PIdx].
+      case: (getm PIdx prk) => [idx|].
+      + by apply: valid_ret.
+      + apply: valid_getr => [// | cnt].
+        apply: valid_putr => //.
+        apply: valid_putr => //.
+        by apply: valid_ret.
+  Qed.
+
+  Hint Extern 1 (ValidCode ?L ?I (get_prk_idx ?ss)) =>
+    eapply get_prk_idx_valid ; [ fmap_solve | fmap_solve | fmap_solve ]
+    : typeclass_instances ssprove_valid_db.
+
+  Definition KDF_hyb (i : nat) : game DERIVE_export :=
+    [package KDF_hyb_locs ;
+      #def #[ DERIVE ] ('(ss, info) : 'ss × 'info) : 'out
+      {
+        '(prk, idx) ← get_prk_idx ss ;;
+        if ltn idx i then
+          T2 ← get mid_loc ;;
+          match getm T2 (prk, info) with
+          | Some y => ret y
+          | None =>
+              y <$ uniform Out_N ;;
+              #put mid_loc := setm T2 (prk, info) y ;;
+              ret y
+          end
+        else
+          ret (PRF info prk)
+      }
+    ].
+
+  (* Connector: handles every [prk] except the one at index exactly [i]
+    itself (using [mid_loc] / the real [PRF] as [KDF_hyb] does), and
+    delegates that one instance to the imported [EVAL] oracle. Composing
+    with [EVAL true] (real) reproduces [KDF_hyb i]; composing with
+    [EVAL false] (ideal) reproduces [KDF_hyb i.+1]. *)
+  Definition KDF_hyb_EVAL (i : nat) : package EVAL_export DERIVE_export :=
+    [package KDF_hyb_locs ;
+      #def #[ DERIVE ] ('(ss, info) : 'ss × 'info) : 'out
+      {
+        #import {sig #[ EVAL_OP ] : 'info → 'out } as eval ;;
+        '(prk, idx) ← get_prk_idx ss ;;
+        if ltn idx i then
+          T2 ← get mid_loc ;;
+          match getm T2 (prk, info) with
+          | Some y => ret y
+          | None =>
+              y <$ uniform Out_N ;;
+              #put mid_loc := setm T2 (prk, info) y ;;
+              ret y
+          end
+        else if (idx : nat) == i then
+          eval info
+        else
+          ret (PRF info prk)
+      }
+    ].
 
   (* The classical birthday bound: with (at most) q samples drawn
      uniformly from a space of size [PRK_N], the probability that two of
      them collide is at most q^2 / (2 * PRK_N). *)
   Definition birthday_bound (q : nat) : R :=
     (q * q)%:R / (2 * PRK_N)%:R.
+
+  (* [KDF_hyb 0] is exactly [KDF_real]: no [prk] ever has index < 0, so
+    the "ideal" branch is dead, and the [prk_count_loc]/[prk_index_loc]
+    bookkeeping is ghost state, exactly like [KDF_bad]'s bookkeeping was
+    dead w.r.t. [KDF_bad_KDF_ideal_equiv] above. *)
+  Lemma KDF_real_KDF_hyb0_equiv :
+    KDF_real ≈₀ KDF_hyb 0.
+  Proof.
+    apply eq_rel_perf_ind_ignore with [fmap mid_loc; prk_count_loc; prk_index_loc].
+    1: fmap_solve.
+    simplify_eq_rel arg.
+    destruct arg as [ss info].
+    rewrite /get_prk_idx /=.
+    apply: r_get_vs_get_remember => T.
+    destruct (getm T ss) as [prk|] eqn:HT.
+    - rewrite HT /=.
+      apply: r_get_remember_rhs => PIdx.
+      destruct (getm PIdx prk) as [idx|] eqn:HPIdx.
+      + rewrite HPIdx /=.
+        apply: r_ret => s0 s1 h.
+        destruct h as [[[Hinv ?] ?] ?].
+        split; [ reflexivity | exact Hinv ].
+      + rewrite HPIdx /=.
+        apply: r_get_remember_rhs => cnt.
+        apply: r_put_rhs. apply: r_put_rhs.
+        ssprove_restore_mem; last by apply: r_ret.
+        by ssprove_invariant.
+    - rewrite HT /=.
+      apply: r_uniform_bij => [|prk].
+      1: exists id; done.
+      apply: r_put_vs_put.
+      (* flush this put back to a clean invariant before the next [get] --
+        see the comment on the analogous step in [KDF_bad_KDF_ideal_equiv]. *)
+      ssprove_restore_mem; [ by ssprove_invariant | ].
+      apply: r_get_remember_rhs => PIdx.
+      destruct (getm PIdx prk) as [idx|] eqn:HPIdx.
+      + rewrite HPIdx /=.
+        apply: r_ret => s0 s1 h.
+        destruct h as [Hinv ?].
+        split; [ reflexivity | exact Hinv ].
+      + rewrite HPIdx /=.
+        apply: r_get_remember_rhs => cnt.
+        apply: r_put_rhs. apply: r_put_rhs.
+        ssprove_restore_mem; last by apply: r_ret.
+        by ssprove_invariant.
+  Qed.
+
+  (**
+    Step 2 of 3 (hop 2): [KDF_hyb i] agrees with [KDF_hyb_EVAL i] composed
+    with the *real* single-key oracle [EVAL true]. [KDF_hyb_EVAL i] routes
+    exactly the prk at index [i] through the imported [eval], and
+    [EVAL_pkg_tt] lazily samples one hidden key on first use -- forced (by
+    the invariant below) to coincide with that one prk.
+
+    Unlike [PRFPRG.v]'s [GEN_GEN_HYB_equiv] (hybrid index = a raw,
+    ever-incrementing query counter, so "count = i" happens at most once),
+    here "idx = i" can recur: every later query resolving to the *same*
+    prk sees the same idx again. The invariant's second conjunct handles
+    that: once some prk is assigned index [i], [eval_key_loc] is pinned to
+    exactly that prk for good, so repeat queries just replay the cached
+    branch identically on both sides.
+
+    The third conjunct is a structural fact about [extract_loc] /
+    [prk_index_loc] alone (no [eval_key_loc] involved): every [prk] ever
+    handed out by [extract_loc] already has an index assigned, since
+    [get_prk_idx] always assigns one immediately after determining [prk],
+    whether [prk] came from a fresh sample or a [T]-lookup. This is what
+    rules out the "prk known, but its index somehow isn't" case below. *)
+  Definition KDF_hyb_EVAL_inv (i : nat) : precond :=
+    heap_ignore [fmap eval_key_loc] ⋊
+    couple_lhs extract_loc prk_index_loc
+      (fun T PIdx => forall ss0 prk0, T ss0 = Some prk0 -> exists idx0, PIdx prk0 = Some idx0) ⋊
+    couple_rhs prk_count_loc eval_key_loc
+      (fun cnt k => leq cnt i -> k = None) ⋊
+    couple_rhs prk_index_loc eval_key_loc
+      (fun PIdx k => forall prk0, getm PIdx prk0 = Some i -> k = Some prk0).
+
+  Lemma KDF_hyb_KDF_hyb_EVAL_true_equiv i :
+    KDF_hyb i ≈₀ KDF_hyb_EVAL i ∘ EVAL true.
+  Proof.
+    apply eq_rel_perf_ind with (KDF_hyb_EVAL_inv i).
+    1: {
+      eapply Invariant_inv_conj.
+      - eapply Invariant_inv_conj.
+        + eapply Invariant_inv_conj.
+          * eapply Invariant_heap_ignore.
+            rewrite /KDF_hyb /KDF_hyb_EVAL /EVAL /=. fmap_solve.
+          * eapply SemiInvariant_relApp.
+            -- rewrite /KDF_hyb /KDF_hyb_EVAL /EVAL /KDF_hyb_locs /=. by [].
+            -- done.
+        + eapply SemiInvariant_relApp.
+          * rewrite /KDF_hyb /KDF_hyb_EVAL /EVAL /KDF_hyb_locs /=. by [].
+          * done.
+      - eapply SemiInvariant_relApp.
+        + rewrite /KDF_hyb /KDF_hyb_EVAL /EVAL /KDF_hyb_locs /=. by [].
+        + done.
+    }
+    simplify_eq_rel arg.
+    ssprove_code_simpl.
+    destruct arg as [ss info].
+    rewrite /get_prk_idx /=.
+    apply: r_get_vs_get_remember => T.
+    destruct (getm T ss) as [prk|] eqn:HT.
+    - rewrite HT /=.
+      apply: r_get_vs_get_remember => PIdx.
+      destruct (getm PIdx prk) as [idx|] eqn:HPIdx.
+      + (* prk and idx both already known: no sampling on either side *)
+        rewrite HPIdx /=.
+        case: (ltnP idx i) => Hlt /=.
+        * (* idx < i: identical [mid_loc] code on both sides *)
+          apply: r_get_vs_get_remember => T2.
+          destruct (getm T2 (prk, info)) as [y|] eqn:HT2.
+          -- rewrite HT2 /=.
+             apply: r_ret => s0 s1 h.
+             split; [ reflexivity | extract_base_inv h ].
+          -- rewrite HT2 /=.
+             apply: r_uniform_bij => [|y]. 1: exists id; done.
+             apply: r_put_vs_put.
+             ssprove_restore_mem; last by apply: r_ret.
+             close_preserve4.
+        * (* i <= idx *)
+          case: (eqVneq idx i) => Heq /=.
+          -- (* idx = i: RHS's [eval] must agree with LHS's real PRF, via
+               the invariant's second conjunct (a [prk] once assigned index
+               [i] pins [eval_key_loc] to it for good). *)
+             apply: r_get_remember_rhs => k.
+             ssprove_rem_rel 0%N => Hinv.
+             rewrite Heq in HPIdx.
+             rewrite (Hinv prk HPIdx) /=.
+             apply: r_ret => s0 s1 h.
+             split; [ reflexivity | extract_base_inv h ].
+          -- (* idx <> i: RHS falls through to the real-[PRF] branch too *)
+             apply: r_ret => s0 s1 h.
+             split; [ reflexivity | extract_base_inv h ].
+      + (* IMPOSSIBLE: [get_prk_idx] always assigns [prk] an index in the
+           very same call it first stores [prk] in [extract_loc], so a
+           [prk] already known to [extract_loc] can never be missing from
+           [prk_index_loc]. This is exactly the invariant's third
+           conjunct. *)
+        ssprove_rem_rel 2%N => Hdom.
+        exfalso.
+        have [idx0 Hidx0] := Hdom ss prk HT.
+        rewrite HPIdx in Hidx0. discriminate.
+    - (* [T ss = None]: [prk] is freshly sampled. [extract_loc] is shared
+         state, so this sample -- call it [a] -- must be the *same* value
+         on both sides (that's what "not [heap_ignore]'d" already forces),
+         hence coupled via [r_uniform_bij] with [f := id] immediately.
+
+         UNRESOLVED, two compounding gaps:
+
+         (1) Once [a] is sampled and [extract_loc] updated, recovering a
+         clean invariant (to then [get prk_index_loc]) requires showing
+         the third conjunct survives that update -- true (case on whether
+         [a] already has an index or not), but *not* automatic: unlike
+         every other [close_preserve]-style call in this file, the
+         updated location ([extract_loc]) is one the invariant actually
+         quantifies over, so [ssprove_invariant]'s generic search can't
+         discharge it; it needs a hand-written [preserve_update_rel]
+         proof for this conjunct specifically. Swapping the [get
+         prk_index_loc] to happen *before* the [extract_loc] put (via
+         [ssprove_swap_lhs]/[ssprove_swap_rhs]) sidesteps needing that at
+         the point of the swap, but the same obligation resurfaces at
+         whatever leaf eventually restores the invariant.
+
+         (2) Deeper, in the sub-case where [a] is a genuinely brand new
+         distinct prk *and* its fresh index equals [i]: the RHS's [eval]
+         call independently samples its own hidden key, but the LHS has
+         no sample left to couple it against -- [a] was already fixed
+         above, to decide *this very branch*. This differs from
+         [PRFPRG.v]'s [GEN_GEN_HYB_equiv], where the analogous branch
+         decision is on a pure query *counter*, independent of any
+         sampled value, so neither side's sample is consumed yet by the
+         time the branch is chosen, and swapping brings them adjacent.
+         Here the branch decision (is [a] fresh, and is its rank exactly
+         [i]?) is itself a function of the sampled value [a], so there is
+         no second pending sample on the LHS to couple the RHS's fresh
+         key against. Making this sound likely needs the *hybrid* itself
+         to sample eagerly (the same eager-vs-lazy technique the birthday
+         step already needs for [KDF_mid_KDF_ideal_bound]), not just a
+         smarter tactic. *)
+      admit.
+  Admitted.
 
   (**
     Step 1 (TODO): hybrid argument over the <= q distinct [prk] values
@@ -386,6 +769,7 @@ Section HKDF_example.
     ValidPackage LA DERIVE_export A_export A →
     fseparate LA KDF_real_locs →
     fseparate LA KDF_mid_locs →
+    fseparate LA KDF_hyb_locs →
     AdvantageE KDF_real KDF_mid A <= \sum_(i < q) prf_epsilon A.
   Proof.
   Admitted.
@@ -440,10 +824,11 @@ Section HKDF_example.
     fseparate LA KDF_real_locs →
     fseparate LA KDF_mid_locs →
     fseparate LA KDF_ideal_locs →
+    fseparate LA KDF_hyb_locs →
     AdvantageE KDF_real KDF_ideal A <=
       (\sum_(i < q) prf_epsilon A) + birthday_bound q.
   Proof.
-    intros vA d1 d2 d3.
+    intros vA d1 d2 d3 d4.
     ssprove triangle KDF_real [:: pack KDF_mid ] KDF_ideal A as ineq.
     eapply le_trans. 1: exact ineq.
     apply: lerD.

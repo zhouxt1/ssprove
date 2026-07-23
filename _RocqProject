@@ -1,5 +1,8 @@
 # TODO: remove once 2.3.0 support is removed.
 -arg -w -arg -deprecated-since-mathcomp-2.4.0
+# TODO: remove once all_ssreflect users are migrated to all_boot/all_order.
+-arg -w -arg -deprecated-since-mathcomp-2.5.0
+-arg -w -arg -deprecated-library-file
 
 -Q theories SSProve
 
@@ -44,6 +47,7 @@ theories/Crypt/rhl_semantics/free_monad/FreeProbProg.v
 theories/Crypt/rhl_semantics/free_monad/UniversalFreeMap.v
 theories/Crypt/rhl_semantics/only_prob/SubDistr.v
 theories/Crypt/rhl_semantics/only_prob/Couplings.v
+theories/Crypt/rhl_semantics/only_prob/UpToBad.v
 theories/Crypt/rhl_semantics/only_prob/Theta_dens.v
 theories/Crypt/rhl_semantics/only_prob/Theta_exCP.v
 theories/Crypt/rhl_semantics/only_prob/ThetaDex.v
