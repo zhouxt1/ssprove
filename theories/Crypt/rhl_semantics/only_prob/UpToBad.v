@@ -23,6 +23,8 @@ From mathcomp Require Import all_ssreflect all_algebra reals distr realsum.
 Set Warnings "notation-overridden,ambiguous-paths".
 Unset SsrOldRewriteGoalsOrder.
 
+From SSProve.Crypt Require Import Axioms.
+
 Import GRing.Theory.
 Import Num.Def.
 Import Num.Theory.
@@ -162,3 +164,95 @@ Section UpToBad.
   Qed.
 
 End UpToBad.
+
+(** The "independent" (product) coupling of two distributions, and the
+  fact that it's a genuine coupling. This is exactly the abandoned
+  [Independent_coupling] section at the bottom of Couplings.v (fully
+  commented out there, ending in three [Admitted]s) -- needed for the
+  up-to-bad adversary-linking argument: once a shared [bad] flag is
+  already true, the two sides of the coupling no longer need to be
+  related by shared-code induction at all; each side just needs to
+  keep [bad] true *on its own*, and the product coupling combines two
+  such independent, unary facts into one relational statement for free
+  (its whole support is exactly the product of the two marginals, so a
+  postcondition of the shape [phi0 x /\ phi1 y] transfers immediately
+  from "phi0 holds on d0's support" and "phi1 holds on d1's support"). *)
+Section IndependentCoupling.
+
+  Context {R : realType} {T1 T2 : choiceType}.
+  Context (c1 : {distr T1 / R}) (c2 : {distr T2 / R}).
+  (* [c1]/[c2] need to be *lossless* (total mass exactly 1, not just
+    <=1) for the marginals of the product coupling to come out exactly
+    right -- true of any package's underlying distribution (validity
+    gives losslessness), but not of an arbitrary subdistribution, so
+    it has to be assumed here explicitly. *)
+  Context (Hc1 : psum c1 = 1) (Hc2 : psum c2 = 1).
+
+  Definition indp : {distr (T1 * T2) / R} :=
+    \dlet_(x <- c1) \dlet_(y <- c2) dunit (x, y).
+
+  Lemma indp_ext (x : T1) (y : T2) : indp (x, y) = c1 x * c2 y.
+  Proof.
+    rewrite /indp dletE.
+    have Hinner : forall x0, (\dlet_(y0 <- c2) dunit (x0, y0)) (x, y) = (x0 == x)%:R * c2 y.
+    { move=> x0. rewrite dletE.
+      transitivity (psum (fun y0 => (x0 == x)%:R * ((y0 == y)%:R * c2 y0))).
+      - apply: eq_psum => y0. rewrite dunit1E xpair_eqE.
+        case: (eqVneq x0 x) => Hx0; case: (eqVneq y0 y) => Hy0;
+          rewrite ?Hx0 ?Hy0 ?eqxx //= ?mul0r ?mul1r ?mulr0 ?mulr1 //.
+      - rewrite (psumZ _ (ler0n _ _)). congr (_ * _). exact: esym (pr_pred1 c2 y).
+    }
+    transitivity (psum (fun x0 => (x0 == x)%:R * (c1 x * c2 y))).
+    - apply: eq_psum => x0. rewrite Hinner.
+      case: (eqVneq x0 x) => Hx0.
+      + by rewrite Hx0 !mul1r.
+      + have Hf : (false%:R : R) = 0 by [].
+        by rewrite Hf ?mul0r ?mulr0.
+    - transitivity (psum (fun x0 => (c1 x * c2 y) * (x0 == x)%:R)).
+      { apply: eq_psum => x0. by rewrite mulrC. }
+      rewrite (psumZ _ (mulr_ge0 (ge0_mu c1 x) (ge0_mu c2 y))).
+      transitivity ((c1 x * c2 y) * psum (fun x0 => dunit (T:=T1) x x0)).
+      { congr (_ * _). apply: eq_psum => x0. by rewrite dunit1E eq_sym. }
+      have Hdunit1 : psum (fun x0 => @dunit R T1 x x0) = 1.
+      { have Hle1 : psum (fun x0 => @dunit R T1 x x0) <= 1 := @le1_mu R T1 (dunit x).
+        have Hge1 : (1:R) <= psum (fun x0 => @dunit R T1 x x0).
+        { have H1 : `| @dunit R T1 x x | <= psum (fun x0 => @dunit R T1 x x0)
+            := @ger1_psum R T1 (dunit x) x (@summable_mu R T1 (dunit x)).
+          by rewrite dunit1E eqxx normr1 in H1. }
+        apply: Order.POrderTheory.le_anti. by rewrite Hle1 Hge1. }
+      by rewrite Hdunit1 mulr1.
+  Qed.
+
+  (* Generic distr-extensionality: same pointwise function forces the
+    same record, the other fields being irrelevant by proof irrelevance.
+    (SubDistr.v has [distr_ext], but only for its own globally-fixed [R]
+    from Axioms.v, not our section-local, arbitrary [R : realType].) *)
+  Lemma distr_ext_local {A : choiceType} (mu nu : {distr A / R}) :
+    mu =1 nu -> mu = nu.
+  Proof.
+    destruct mu as [mu muz mu_smbl mu_psum], nu as [nu nuz nu_smbl nu_psum].
+    simpl. move=> H. move: muz mu_smbl mu_psum nuz nu_smbl nu_psum.
+    apply boolp.funext in H. rewrite H. intuition. f_equal.
+    all: apply proof_irrelevance.
+  Qed.
+
+  Lemma indp_lmg : dfst indp = c1.
+  Proof.
+    apply: distr_ext_local => x. rewrite dfstE.
+    transitivity (psum (fun y => c1 x * c2 y)).
+    { apply: eq_psum => y. exact: indp_ext. }
+    by rewrite (psumZ _ (ge0_mu c1 x)) Hc2 mulr1.
+  Qed.
+
+  Lemma indp_rmg : dsnd indp = c2.
+  Proof.
+    apply: distr_ext_local => y. rewrite __deprecated__dsndE.
+    transitivity (psum (fun x => c2 y * c1 x)).
+    { apply: eq_psum => x. rewrite mulrC. exact: indp_ext. }
+    by rewrite (psumZ _ (ge0_mu c2 y)) Hc1 mulr1.
+  Qed.
+
+  Lemma indp_coupling : dfst indp = c1 /\ dsnd indp = c2.
+  Proof. split; [exact: indp_lmg | exact: indp_rmg]. Qed.
+
+End IndependentCoupling.
