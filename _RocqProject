@@ -99,6 +99,8 @@ theories/Crypt/examples/package_usage_example.v
 theories/Crypt/examples/interpreter_test.v
 theories/Crypt/examples/concrete_groups.v
 theories/Crypt/examples/PRF.v
+theories/Crypt/examples/Birthday.v
+theories/Crypt/examples/HKDF.v
 theories/Crypt/examples/OTP.v
 theories/Crypt/examples/KEMDEM.v
 theories/Crypt/examples/RandomOracle.v
