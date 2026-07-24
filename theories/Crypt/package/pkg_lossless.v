@@ -28,7 +28,8 @@ Set Warnings "notation-overridden,ambiguous-paths,notation-incompatible-format".
 Unset SsrOldRewriteGoalsOrder.
 
 From SSProve.Crypt Require Import Axioms choice_type fmap_extra
-  pkg_core_definition pkg_composition pkg_semantics pkg_distr pkg_advantage.
+  pkg_core_definition pkg_heap pkg_composition pkg_semantics pkg_distr
+  pkg_advantage RulesStateProb.
 From SSProve.Crypt.nominal Require Import Pr.
 
 Import GRing.Theory.
@@ -83,3 +84,41 @@ Section LosslessValid.
   Qed.
 
 End LosslessValid.
+
+(** Bridge between [Pr_code]'s denotational semantics (direct structural
+  recursion via the [SDistr] relative monad) and the semantics used by
+  the relational program logic, [θ_dens (θ0 (repr c) h)] (via the free
+  monad translation [repr] then the state-threading interpreter [θ0]).
+  These are two different encodings of "the same" operational meaning
+  of [raw_code] -- confirmed NOT definitionally equal (a bare [erefl]
+  fails to unify them) -- so this lemma is needed to transport
+  [Pr_code_lossless] into the vocabulary [independent_rule]
+  (UpToBadState.v) actually needs. Proved by a straightforward
+  five-case induction on [raw_code], mirroring [Pr_code_bind]'s own
+  structure; each non-trivial case reduces, after [cbn], to the exact
+  same "doubly wrapped [SDistr_obligation_2]" shape [Pr_code_ret]'s own
+  proof already has to unwind. *)
+Lemma Pr_code_theta_bridge {A : choiceType} (c : raw_code A) (h : heap) :
+  Pr_code c h = θ_dens (θ0 (repr c) h).
+Proof.
+  induction c in h |- *.
+  - rewrite Pr_code_ret. cbn. reflexivity.
+  - rewrite Pr_code_call. cbn. symmetry; apply: dlet_null_ext.
+  - rewrite Pr_code_get. cbn.
+    rewrite /SubDistr.SDistr_obligation_2 2!SubDistr.SDistr_rightneutral //.
+  - rewrite Pr_code_put. cbn.
+    rewrite /SubDistr.SDistr_obligation_2 2!SubDistr.SDistr_rightneutral //.
+  - rewrite Pr_code_sample. cbn.
+    apply eq_dlet => x.
+    rewrite /SubDistr.SDistr_obligation_2 2!SubDistr.SDistr_rightneutral //.
+Qed.
+
+(** [Pr_code_lossless], transported into the [θ_dens ∘ θ0 ∘ repr]
+  vocabulary that [independent_rule] (UpToBadState.v) needs. *)
+Lemma theta_lossless {A : choiceType} (L : Locations) (c : raw_code A) :
+  lossless_valid L c → ∀ h, psum (θ_dens (θ0 (repr c) h)) = 1.
+Proof.
+  move=> Hlv h.
+  rewrite -Pr_code_theta_bridge.
+  exact: (Pr_code_lossless L c Hlv h).
+Qed.
