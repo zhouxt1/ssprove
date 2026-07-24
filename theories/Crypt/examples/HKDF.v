@@ -73,7 +73,8 @@ Unset SsrOldRewriteGoalsOrder. (* remove the line when requiring MathComp >= 2.6
 From SSProve.Mon Require Import SPropBase.
 From SSProve.Crypt Require Import Axioms ChoiceAsOrd SubDistr Couplings
   UniformDistrLemmas FreeProbProg Theta_dens RulesStateProb
-  pkg_core_definition choice_type pkg_composition pkg_rhl Package Prelude.
+  pkg_core_definition choice_type pkg_composition pkg_rhl Package Prelude
+  pkg_lossless pkg_upto_bad.
 
 From Stdlib Require Import Utf8.
 From extructures Require Import ord fset fmap.
@@ -473,6 +474,213 @@ Section HKDF_example.
       all: apply: r_put_vs_put.
       all: ssprove_restore_mem; last by apply: r_ret.
       all: by ssprove_invariant.
+  Qed.
+
+  (* --- relating [KDF_mid'] and [KDF_bad] via up-to-bad reasoning ---
+
+    Both games now maintain [extract_loc]/[used_prk_loc]/[bad_loc]
+    identically (the ghost-tracking fragment is literally the same
+    code). [mid_bad_match] is the relabelling fact making [mid_loc]
+    (keyed by [prk]) and [indep_loc] (keyed by [ss]) agree as long as
+    Extract has never assigned the same [prk] to two different [ss]'s,
+    i.e. as long as [bad_loc] is still [false]: every [ss] with a
+    known [prk] must see the same table entry on both sides. The
+    moment [bad_loc] fires this guarantee is dropped, which is exactly
+    why [KDF_mid'_bad_inv]'s relational conjunct is gated on
+    [b = false] -- required so that [HbadI] below (the invariant must
+    hold whenever *both* sides already have [bad_loc = true], with no
+    other correlation assumed) is satisfiable. *)
+
+  Definition mid_bad_match
+    (T : chMap 'ss 'prk) (Tm : chMap ('prk × 'info) 'out) (Ti : chMap ('ss × 'info) 'out) : Prop :=
+    ∀ ss info,
+      match getm T ss with
+      | Some prk => getm Tm (prk, info) = getm Ti (ss, info)
+      | None => True
+      end.
+
+  Definition KDF_mid'_bad_locs := unionm KDF_mid'_locs KDF_bad_locs.
+
+  Definition KDF_mid'_bad_inv : precond :=
+    heap_ignore KDF_mid'_bad_locs ⋊
+    syncs bad_loc ⋊
+    rel_app [:: (lhs, bad_loc); (lhs, extract_loc); (lhs, mid_loc); (lhs, used_prk_loc);
+                (rhs, extract_loc); (rhs, used_prk_loc); (rhs, indep_loc)]
+      (fun b T Tm U T' U' Ti =>
+         b = false -> T = T' ∧ U = U' ∧ mid_bad_match T Tm Ti).
+
+  Lemma KDF_mid'_bad_Invariant : Invariant KDF_mid'_locs KDF_bad_locs KDF_mid'_bad_inv.
+  Proof.
+    eapply Invariant_inv_conj.
+    - eapply Invariant_inv_conj.
+      + eapply Invariant_heap_ignore. fmap_solve.
+      + eapply SemiInvariant_relApp.
+        * simpl. repeat split. all: try fmap_solve; try done.
+        * done.
+    - eapply SemiInvariant_relApp.
+      + simpl. repeat split. all: try fmap_solve; try done.
+      + done.
+  Qed.
+
+  (* [bad_id := 4] throughout: [bad_loc] (this section) and
+    [pkg_upto_bad.bad_loc 4] are definitionally the same location. *)
+
+  Lemma KDF_mid'_bad_preserved : bad_preserved DERIVE_export 4 KDF_mid'.
+  Proof.
+    move=> id S T x h has Hb.
+    fmap_invert has.
+    simplify_linking.
+    case: x => ss info /=.
+    have Hlv : lossless_valid KDF_mid'_locs
+      (T ← get extract_loc ;;
+        prk ← match T ss with
+              | Some prk => ret prk
+              | None =>
+                  prk ← sample uniform PRK_N ;;
+                  #put extract_loc := setm T ss prk ;;
+                  Used ← get used_prk_loc ;;
+                  match Used prk with
+                  | Some _ => #put bad_loc := true ;; ret prk
+                  | None => #put used_prk_loc := setm Used prk tt ;; ret prk
+                  end
+              end ;;
+        T2 ← get mid_loc ;;
+        match T2 (prk, info) with
+        | Some y => ret y
+        | None =>
+            y ← sample uniform Out_N ;;
+            #put mid_loc := setm T2 (prk, info) y ;;
+            ret y
+        end).
+    - apply: lv_getr; [fmap_solve | move=> T; case: (T ss) => [prk|] ].
+      + apply: lv_getr; [fmap_solve | move=> T2; case: (T2 (prk, info)) => [y|] ].
+        * exact: lv_ret.
+        * apply: lv_sampler => y0. apply: lv_putr; [fmap_solve | exact: lv_ret].
+      + apply: lv_sampler => prk. apply: lv_putr; [fmap_solve |
+          apply: lv_getr; [fmap_solve | move=> Used; case: (Used prk) => [[]|] ] ].
+        * apply: lv_putr; [fmap_solve |
+            apply: lv_getr; [fmap_solve | move=> T2; case: (T2 (prk, info)) => [y|] ] ].
+          -- exact: lv_ret.
+          -- apply: lv_sampler => y0. apply: lv_putr; [fmap_solve | exact: lv_ret].
+        * apply: lv_putr; [fmap_solve |
+            apply: lv_getr; [fmap_solve | move=> T2; case: (T2 (prk, info)) => [y|] ] ].
+          -- exact: lv_ret.
+          -- apply: lv_sampler => y0. apply: lv_putr; [fmap_solve | exact: lv_ret].
+    - have Hm : bad_loc_monotone 4
+        (T ← get extract_loc ;;
+          prk ← match T ss with
+                | Some prk => ret prk
+                | None =>
+                    prk ← sample uniform PRK_N ;;
+                    #put extract_loc := setm T ss prk ;;
+                    Used ← get used_prk_loc ;;
+                    match Used prk with
+                    | Some _ => #put bad_loc := true ;; ret prk
+                    | None => #put used_prk_loc := setm Used prk tt ;; ret prk
+                    end
+                end ;;
+          T2 ← get mid_loc ;;
+          match T2 (prk, info) with
+          | Some y => ret y
+          | None =>
+              y ← sample uniform Out_N ;;
+              #put mid_loc := setm T2 (prk, info) y ;;
+              ret y
+          end).
+      + apply: blm_getr => T. case: (T ss) => [prk|].
+        * apply: blm_getr => T2. case: (T2 (prk, info)) => [y|].
+          -- exact: blm_ret.
+          -- apply: blm_sampler => y0. apply: blm_putr_other; [done | exact: blm_ret].
+        * apply: blm_sampler => prk. apply: blm_putr_other; [done |
+            apply: blm_getr => Used; case: (Used prk) => [[]|] ].
+          -- apply: blm_putr_bad.
+             apply: blm_getr => T2; case: (T2 (prk, info)) => [y|].
+             ++ exact: blm_ret.
+             ++ apply: blm_sampler => y0. apply: blm_putr_other; [done | exact: blm_ret].
+          -- apply: blm_putr_other; [done |
+               apply: blm_getr => T2; case: (T2 (prk, info)) => [y|] ].
+             ++ exact: blm_ret.
+             ++ apply: blm_sampler => y0. apply: blm_putr_other; [done | exact: blm_ret].
+      + exact: (Pr_code_lossless_bad KDF_mid'_locs _ Hlv Hm h Hb).
+  Qed.
+
+  Lemma KDF_bad_bad_preserved : bad_preserved DERIVE_export 4 KDF_bad.
+  Proof.
+    move=> id S T x h has Hb.
+    fmap_invert has.
+    simplify_linking.
+    case: x => ss info /=.
+    have Hlv : lossless_valid KDF_bad_locs
+      (T ← get extract_loc ;;
+       match T ss with
+       | Some _ => ret tt
+       | None =>
+           prk ← sample uniform PRK_N ;;
+           #put extract_loc := setm T ss prk ;;
+           Used ← get used_prk_loc ;;
+           match Used prk with
+           | Some _ => #put bad_loc := true ;; ret tt
+           | None => #put used_prk_loc := setm Used prk tt ;; ret tt
+           end
+       end ;;
+       T2 ← get indep_loc ;;
+       match T2 (ss, info) with
+       | Some y => ret y
+       | None =>
+           y ← sample uniform Out_N ;;
+           #put indep_loc := setm T2 (ss, info) y ;;
+           ret y
+       end).
+    - apply: lv_getr; [fmap_solve | move=> T; case: (T ss) => [prk0|] ].
+      + apply: lv_getr; [fmap_solve | move=> T2; case: (T2 (ss, info)) => [y|] ].
+        * exact: lv_ret.
+        * apply: lv_sampler => y0. apply: lv_putr; [fmap_solve | exact: lv_ret].
+      + apply: lv_sampler => prk. apply: lv_putr; [fmap_solve |
+          apply: lv_getr; [fmap_solve | move=> Used; case: (Used prk) => [[]|] ] ].
+        * apply: lv_putr; [fmap_solve |
+            apply: lv_getr; [fmap_solve | move=> T2; case: (T2 (ss, info)) => [y|] ] ].
+          -- exact: lv_ret.
+          -- apply: lv_sampler => y0. apply: lv_putr; [fmap_solve | exact: lv_ret].
+        * apply: lv_putr; [fmap_solve |
+            apply: lv_getr; [fmap_solve | move=> T2; case: (T2 (ss, info)) => [y|] ] ].
+          -- exact: lv_ret.
+          -- apply: lv_sampler => y0. apply: lv_putr; [fmap_solve | exact: lv_ret].
+    - have Hm : bad_loc_monotone 4
+        (T ← get extract_loc ;;
+         match T ss with
+         | Some _ => ret tt
+         | None =>
+             prk ← sample uniform PRK_N ;;
+             #put extract_loc := setm T ss prk ;;
+             Used ← get used_prk_loc ;;
+             match Used prk with
+             | Some _ => #put bad_loc := true ;; ret tt
+             | None => #put used_prk_loc := setm Used prk tt ;; ret tt
+             end
+         end ;;
+         T2 ← get indep_loc ;;
+         match T2 (ss, info) with
+         | Some y => ret y
+         | None =>
+             y ← sample uniform Out_N ;;
+             #put indep_loc := setm T2 (ss, info) y ;;
+             ret y
+         end).
+      + apply: blm_getr => T. case: (T ss) => [prk0|].
+        * apply: blm_getr => T2. case: (T2 (ss, info)) => [y|].
+          -- exact: blm_ret.
+          -- apply: blm_sampler => y0. apply: blm_putr_other; [done | exact: blm_ret].
+        * apply: blm_sampler => prk. apply: blm_putr_other; [done |
+            apply: blm_getr => Used; case: (Used prk) => [[]|] ].
+          -- apply: blm_putr_bad.
+             apply: blm_getr => T2; case: (T2 (ss, info)) => [y|].
+             ++ exact: blm_ret.
+             ++ apply: blm_sampler => y0. apply: blm_putr_other; [done | exact: blm_ret].
+          -- apply: blm_putr_other; [done |
+               apply: blm_getr => T2; case: (T2 (ss, info)) => [y|] ].
+             ++ exact: blm_ret.
+             ++ apply: blm_sampler => y0. apply: blm_putr_other; [done | exact: blm_ret].
+      + exact: (Pr_code_lossless_bad KDF_bad_locs _ Hlv Hm h Hb).
   Qed.
 
   Local Open Scope ring_scope.
