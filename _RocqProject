@@ -93,6 +93,8 @@ theories/Crypt/nominal/packages/Async.v
 theories/Crypt/nominal/packages/TotalProbability.v
 theories/Crypt/nominal/packages/HybridArgument.v
 
+theories/Crypt/package/pkg_lossless.v
+
 # Examples of assumptions
 theories/Crypt/examples/Assumptions/DDH.v
 theories/Crypt/examples/Assumptions/DL.v
