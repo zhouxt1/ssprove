@@ -27,9 +27,10 @@ From mathcomp Require Import all_ssreflect all_algebra reals distr realsum.
 Set Warnings "notation-overridden,ambiguous-paths,notation-incompatible-format".
 Unset SsrOldRewriteGoalsOrder.
 
+From extructures Require Import ord fset fmap.
 From SSProve.Crypt Require Import Axioms choice_type fmap_extra
   pkg_core_definition pkg_heap pkg_composition pkg_semantics pkg_distr
-  pkg_advantage RulesStateProb.
+  pkg_advantage RulesStateProb pkg_rhl.
 From SSProve.Crypt.nominal Require Import Pr.
 
 Import GRing.Theory.
@@ -121,4 +122,50 @@ Proof.
   move=> Hlv h.
   rewrite -Pr_code_theta_bridge.
   exact: (Pr_code_lossless L c Hlv h).
+Qed.
+
+(** [lossless_valid]'s structural corollary: [c] never writes outside
+  [L], so running it from [h] only ever changes locations in [L] --
+  needed to show a [heap_ignore]-style invariant is preserved by a
+  package's own oracle call, regardless of any other (e.g. bad-flag)
+  reasoning about that call. *)
+Lemma Pr_code_frame {A : choiceType} (L : Locations) (c : raw_code A) :
+  lossless_valid L c →
+  ∀ h (l : Location), l.1 \notin domm L →
+    ∀ a h', (0 < Pr_code c h (a, h'))%R → get_heap h' l = get_heap h l.
+Proof.
+  move=> Hlv.
+  induction Hlv as [x | l0 k Hl0 k' IH | l0 v k Hl0 k' IH | op k Hop k' IH];
+    move=> h l Hnotin a h' Hgt.
+  - rewrite Pr_code_ret dunit1E in Hgt.
+    have Heq := ge0_eq Hgt. inversion Heq. subst. reflexivity.
+  - move: Hgt. rewrite Pr_code_get => Hgt. exact: (IH _ h l Hnotin a h' Hgt).
+  - move: Hgt. rewrite Pr_code_put => Hgt.
+    rewrite (IH (set_heap h l0 v) l Hnotin a h' Hgt).
+    apply: get_set_heap_neq.
+    apply/eqP => Heq. move: Hnotin => /negP; apply.
+    rewrite Heq. apply: fhas_in. exact: Hl0.
+  - move: Hgt. rewrite Pr_code_sample => Hgt.
+    have Hin : (a, h') \in dinsupp (\dlet_(x <- projT2 op) Pr_code (k x) h).
+    { apply/dinsuppP.
+      move=> Hz. rewrite Hz in Hgt. by rewrite Order.POrderTheory.ltxx in Hgt. }
+    have [x Hx1 Hx2] := dinsupp_dlet Hin.
+    have Hx2' : (0 < Pr_code (k x) h (a, h'))%R.
+    { move: Hx2 => /eqP Hne0.
+      rewrite lt0r. apply/andP; split.
+      - apply/negP => /eqP Heq0. exact: (Hne0 Heq0).
+      - exact: ge0_mu. }
+    exact: (IH x h l Hnotin a h' Hx2').
+Qed.
+
+(** [Pr_code_frame], transported into the [θ_dens ∘ θ0 ∘ repr]
+  vocabulary. *)
+Lemma theta_frame {A : choiceType} (L : Locations) (c : raw_code A) :
+  lossless_valid L c →
+  ∀ h (l : Location), l.1 \notin domm L →
+    ∀ a h', (0 < θ_dens (θ0 (repr c) h) (a, h'))%R → get_heap h' l = get_heap h l.
+Proof.
+  move=> Hlv h l Hnotin.
+  rewrite -(Pr_code_theta_bridge c h).
+  exact: (Pr_code_frame L c Hlv h l Hnotin).
 Qed.
