@@ -37,8 +37,8 @@ Lemma independent_rule
   { A1 A2 : ord_choiceType } { S1 S2 : choiceType }
   (c1 : FrStP S1 A1) (c2 : FrStP S2 A2)
   (P : (S1 * S2) → Prop) (Q : (A1 * S1) → (A2 * S2) → Prop)
-  (Hlossless1 : ∀ s1, psum (θ_dens (θ0 c1 s1)) = 1)
-  (Hlossless2 : ∀ s2, psum (θ_dens (θ0 c2 s2)) = 1)
+  (Hlossless1 : ∀ s1 s2, P (s1, s2) → psum (θ_dens (θ0 c1 s1)) = 1)
+  (Hlossless2 : ∀ s1 s2, P (s1, s2) → psum (θ_dens (θ0 c2 s2)) = 1)
   (HQ : ∀ s1 s2, P (s1, s2) →
     ∀ a1 s1' a2 s2',
       (0 < θ_dens (θ0 c1 s1) (a1, s1'))%R →
@@ -51,8 +51,8 @@ Proof.
   exists (indp (θ_dens (θ0 c1 s1)) (θ_dens (θ0 c2 s2))).
   split.
   - split.
-    + exact: (indp_lmg _ _ (Hlossless2 s2)).
-    + exact: (indp_rmg _ _ (Hlossless1 s1)).
+    + exact: (indp_lmg _ _ (Hlossless2 s1 s2 Hpre)).
+    + exact: (indp_rmg _ _ (Hlossless1 s1 s2 Hpre)).
   - move=> [a1 s1'] [a2 s2'] Hgt.
     apply: Himp.
     move: Hgt.
