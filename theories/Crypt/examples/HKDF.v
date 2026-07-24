@@ -383,6 +383,98 @@ Section HKDF_example.
       all: close_preserve.
   Qed.
 
+  (* --- ghost-annotated middle game: [KDF_mid] plus the same
+    [bad_loc]/[used_prk_loc] bookkeeping [KDF_bad] carries ---
+
+    [eq_up_to_bad_adversary_link] (pkg_upto_bad.v) needs [bad_loc] to be
+    trackable -- and kept in sync by the invariant -- on *both* sides of
+    the games it relates. [KDF_mid] itself has no such bookkeeping, so it
+    cannot be compared against [KDF_bad] directly via that machinery.
+    [KDF_mid'] closes that gap: it is definitionally [KDF_mid] (real
+    Extract, ideal per-[prk] Expand via [mid_loc]) with [KDF_bad]'s ghost
+    collision-tracking spliced into the very branch that discovers a
+    fresh [prk], so the two games maintain [bad_loc]/[used_prk_loc]
+    identically. The ghost state is dead code w.r.t. [KDF_mid']'s own
+    output, exactly as it is for [KDF_bad] w.r.t. [indep_loc] -- which is
+    what makes [KDF_mid_KDF_mid'_equiv] below provable with no
+    probability reasoning, mirroring [KDF_real_KDF_hyb0_equiv]'s style. *)
+
+  Definition KDF_mid'_locs :=
+    [fmap extract_loc; mid_loc; bad_loc; used_prk_loc].
+
+  Definition KDF_mid' : game DERIVE_export :=
+    [package KDF_mid'_locs ;
+      #def #[ DERIVE ] ('(ss, info) : 'ss × 'info) : 'out
+      {
+        T ← get extract_loc ;;
+        prk ← match getm T ss with
+        | Some prk => ret prk
+        | None =>
+            prk <$ uniform PRK_N ;;
+            #put extract_loc := setm T ss prk ;;
+            Used ← get used_prk_loc ;;
+            match getm Used prk with
+            | None => #put used_prk_loc := setm Used prk tt ;; ret prk
+            | Some _ => #put bad_loc := true ;; ret prk
+            end
+        end ;;
+        T2 ← get mid_loc ;;
+        match getm T2 (prk, info) with
+        | Some y => ret y
+        | None =>
+            y <$ uniform Out_N ;;
+            #put mid_loc := setm T2 (prk, info) y ;;
+            ret y
+        end
+      }
+    ].
+
+  Lemma KDF_mid_KDF_mid'_equiv :
+    KDF_mid ≈₀ KDF_mid'.
+  Proof.
+    apply eq_rel_perf_ind_ignore with [fmap bad_loc; used_prk_loc].
+    1: fmap_solve.
+    simplify_eq_rel arg.
+    destruct arg as [ss info].
+    apply: r_get_vs_get_remember => T.
+    destruct (getm T ss) as [prk|] eqn:HT.
+    - (* [ss] already extracted: identical on both sides, no ghost update *)
+      rewrite HT /=.
+      apply: r_get_vs_get_remember => T2.
+      destruct (getm T2 (prk, info)) as [y|] eqn:HT2.
+      + rewrite HT2 /=.
+        apply: r_ret => s0 s1 h.
+        split; [ reflexivity | extract_base_inv h ].
+      + rewrite HT2 /=.
+        apply: r_uniform_bij => [|y]. 1: exists id; done.
+        apply: r_put_vs_put.
+        ssprove_restore_mem; last by apply: r_ret.
+        by ssprove_invariant.
+    - (* [ss] is new: sample the same [prk] on both sides; the RHS alone
+        also updates the ghost [used_prk_loc]/[bad_loc] bookkeeping,
+        which is ignored by the invariant. *)
+      rewrite HT /=.
+      apply: r_uniform_bij => [|prk']. 1: exists id; done.
+      apply: r_put_vs_put.
+      ssprove_restore_mem; [ by ssprove_invariant | ].
+      apply: r_get_remember_rhs => Used.
+      destruct (getm Used prk') as [[]|] eqn:HU.
+      all: rewrite HU /=.
+      all: apply: r_put_rhs.
+      all: ssprove_restore_mem; [ by ssprove_invariant | ].
+      all: apply: r_get_vs_get_remember => T2.
+      all: destruct (getm T2 (prk', info)) as [y|] eqn:HT2.
+      all: rewrite HT2 /=.
+      all: try (
+        apply: r_ret => s0 s1 h ;
+        split ; [ reflexivity | extract_base_inv h ]
+      ).
+      all: apply: r_uniform_bij => [|y]; [ exists id; done | ].
+      all: apply: r_put_vs_put.
+      all: ssprove_restore_mem; last by apply: r_ret.
+      all: by ssprove_invariant.
+  Qed.
+
   Local Open Scope ring_scope.
 
   (* --- single-key PRF assumption, spent one hybrid step at a time ---
