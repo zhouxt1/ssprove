@@ -480,3 +480,76 @@ Proof.
   rewrite /StateTransfThetaDens.unaryStateBeta'_obligation_1.
   exact: Hb.
 Qed.
+
+(** [bad_preserved]'s concrete witness: a syntactic guarantee that a
+  piece of code only ever writes [true] to [bad_loc bad_id] (never
+  [false], and any other location is untouched by this constraint) --
+  a purely structural, LOSSLESSNESS-FREE property (unlike
+  [lossless_valid], no [LosslessOp] side condition is needed: even a
+  divergent sampler can't make [bad_loc] go back to [false]). Meant to
+  be combined with [lossless_valid] (pkg_lossless.v) via
+  [Pr_code_lossless_bad] below to discharge a concrete package's
+  [bad_preserved] obligation. *)
+Inductive bad_loc_monotone (bad_id : nat) {A : choiceType} : raw_code A → Prop :=
+| blm_ret : ∀ x, bad_loc_monotone bad_id (ret x)
+| blm_call : ∀ o x k, (∀ v, bad_loc_monotone bad_id (k v)) → bad_loc_monotone bad_id (opr o x k)
+| blm_getr : ∀ l k, (∀ v, bad_loc_monotone bad_id (k v)) → bad_loc_monotone bad_id (getr l k)
+| blm_putr_bad : ∀ k,
+    bad_loc_monotone bad_id k →
+    bad_loc_monotone bad_id (putr (bad_loc bad_id) true k)
+| blm_putr_other : ∀ l v k,
+    l.1 ≠ bad_id →
+    bad_loc_monotone bad_id k →
+    bad_loc_monotone bad_id (putr l v k)
+| blm_sampler : ∀ op k, (∀ v, bad_loc_monotone bad_id (k v)) → bad_loc_monotone bad_id (sampler op k).
+
+Lemma Pr_code_bad_monotone {bad_id : nat} {A : choiceType} (c : raw_code A) :
+  bad_loc_monotone bad_id c →
+  ∀ h, get_heap h (bad_loc bad_id) = true →
+    ∀ a h', (0 < Pr_code c h (a, h'))%R → get_heap h' (bad_loc bad_id) = true.
+Proof.
+  move=> Hm.
+  induction Hm as [x | o x k IH | l k IH | k' IH | l v k Hne k' IH | op k IH];
+    move=> h Hb a h' Hgt.
+  - rewrite Pr_code_ret dunit1E in Hgt.
+    have Heq := ge0_eq Hgt. inversion Heq. subst. exact: Hb.
+  - move: Hgt. rewrite Pr_code_call dnullE => Hgt.
+    by rewrite Order.POrderTheory.ltxx in Hgt.
+  - move: Hgt. rewrite Pr_code_get => Hgt.
+    exact: (H _ h Hb a h' Hgt).
+  - move: Hgt. rewrite Pr_code_put => Hgt.
+    apply: (IHIH (set_heap h (bad_loc bad_id) true)).
+    + exact: get_set_heap_eq.
+    + exact: Hgt.
+  - move: Hgt. rewrite Pr_code_put => Hgt.
+    have Hkey : (bad_loc bad_id).1 != l.1.
+    { apply/eqP => Heq. exact: (Hne (esym Heq)). }
+    have Hb2 : get_heap (set_heap h l v) (bad_loc bad_id) = true.
+    { rewrite (get_set_heap_neq h l v (bad_loc bad_id) Hkey). exact: Hb. }
+    exact: (IH (set_heap h l v) Hb2 a h' Hgt).
+Unshelve.
+all: exact: Hkey.
+  - move: Hgt. rewrite Pr_code_sample => Hgt.
+    have Hin : (a, h') \in dinsupp (\dlet_(x <- op.π2) Pr_code (k x) h).
+    { apply/dinsuppP.
+      move=> Hz. rewrite Hz in Hgt. by rewrite Order.POrderTheory.ltxx in Hgt. }
+    have [x Hx1 Hx2] := dinsupp_dlet Hin.
+    have Hx2' : (0 < Pr_code (k x) h (a, h'))%R.
+    { move: Hx2 => /eqP Hne0.
+      rewrite lt0r. apply/andP; split.
+      - apply/negP => /eqP Heq. exact: (Hne0 Heq).
+      - exact: ge0_mu. }
+    exact: (H x h Hb a h' Hx2').
+Qed.
+
+(** [bad_preserved]'s ONLY nontrivial half, [bad_lossless], from a
+  [lossless_valid] fact (ordinary losslessness, pkg_lossless.v) plus
+  a [bad_loc_monotone] fact (this file). *)
+Lemma Pr_code_lossless_bad {bad_id : nat} {A : choiceType} (L : Locations) (c : raw_code A) :
+  lossless_valid L c → bad_loc_monotone bad_id c →
+  ∀ h, get_heap h (bad_loc bad_id) = true → bad_lossless bad_id c h.
+Proof.
+  move=> Hlv Hm h Hb. split.
+  - exact: (Pr_code_lossless L c Hlv h).
+  - move=> a h' Hgt. exact: (Pr_code_bad_monotone c Hm h Hb a h' Hgt).
+Qed.
