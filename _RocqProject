@@ -95,6 +95,7 @@ theories/Crypt/nominal/packages/TotalProbability.v
 theories/Crypt/nominal/packages/HybridArgument.v
 
 theories/Crypt/package/pkg_lossless.v
+theories/Crypt/package/pkg_upto_bad.v
 
 # Examples of assumptions
 theories/Crypt/examples/Assumptions/DDH.v
