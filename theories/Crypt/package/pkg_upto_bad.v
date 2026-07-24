@@ -34,6 +34,7 @@ From SSProve.Crypt Require Import Prelude Axioms ChoiceAsOrd SubDistr Couplings
   pkg_tactics pkg_composition pkg_heap pkg_semantics pkg_advantage
   pkg_invariants pkg_distr Casts fmap_extra pkg_rhl pkg_lossless FreeProbProg.
 From SSProve.Crypt.nominal Require Import Pr.
+From SSProve.Crypt.rhl_semantics.only_prob Require Import UpToBad.
 From SSProve.Crypt.rules Require Import UpToBadState.
 
 Arguments retrFree {_ _ _} _.
@@ -344,4 +345,138 @@ Proof.
       eapply pre_weaken_rule. 1: eapply IH.
       * eapply inversion_valid_sampler. eauto.
       * cbn. intros s₀' s₁' [? ?]. subst. auto.
+Qed.
+
+(** Turns a relational judgement into the actual probability bound,
+  via [pr_up_to_bad] (UpToBad.v) -- mirrors [Pr_eq] (RulesStateProb.v),
+  which does the analogous thing for EXACT equality (using
+  [Hagree]-only, no sync fact: [pr_up_to_bad] doesn't need [bad] to be
+  literally synced across the coupling's support, only that [event]
+  agrees wherever [bad] is false on the LEFT side). *)
+Lemma Pr_bound {X : ord_choiceType} {S : choiceType}
+  {event bad : pred (X * S)}
+  (Psi : S * S → Prop) (phi : (X * S) → (X * S) → Prop)
+  (c1 c2 : RulesStateProb.FrStP S X)
+  (H : ⊨ ⦃ Psi ⦄ c1 ≈ c2 ⦃ phi ⦄)
+  {s1 s2 : S} (HPsi : Psi (s1, s2))
+  (Hagree : ∀ x y, phi x y → bad x = false → event x = event y) :
+  `| \P_[θ_dens (θ0 c1 s1)] event - \P_[θ_dens (θ0 c2 s2)] event |
+  <= \P_[θ_dens (θ0 c1 s1)] bad.
+Proof.
+  specialize (H (s1, s2) (fun '(a, b) => phi a b)). simpl in H.
+  have Hd := H (conj HPsi (fun a b h => h)).
+  destruct Hd as [d [[Hd0 Hd1] Hsupp]].
+  apply: (pr_up_to_bad _ _ d Hd0 Hd1 event bad).
+  move=> x y Hgt Hb. exact: (Hagree x y (Hsupp x y Hgt) Hb).
+Qed.
+
+(** [Pr], but reading [bad_loc]'s final value instead of the run's own
+  boolean output -- the RHS of the top-level Fundamental Lemma bound,
+  [eq_upto_bad_perf_ind] below. *)
+Definition Pr_bad (p : raw_package) (bad_id : nat) : SDistr (bool : choiceType) :=
+  SDistr_bind (fun '(_, s) => SDistr_unit _ (get_heap s (bad_loc bad_id)))
+    (Pr_op p RUN tt empty_heap).
+
+(** The Fundamental Lemma of Game-Playing, in [AdvantageE]'s own
+  vocabulary: mirrors [eq_upto_inv_perf_ind] (pkg_rhl.v, which gives
+  [AdvantageE p₀ p₁ A = 0] from an EXACT-match [eq_up_to_inv]), using
+  [eq_up_to_bad_adversary_link] + [Pr_bound] in place of
+  [eq_up_to_inv_adversary_link] + [Pr_eq_empty]. *)
+Lemma eq_upto_bad_perf_ind :
+  ∀ {L₀ L₁ LA E} (p₀ p₁ : raw_package) (I : precond) (bad_id : nat) (A : raw_package)
+    `{ValidPackage L₀ Game_import E p₀}
+    `{ValidPackage L₁ Game_import E p₁}
+    `{ValidPackage LA E A_export A},
+    INV LA I →
+    I (empty_heap, empty_heap) →
+    fseparate LA L₀ →
+    fseparate LA L₁ →
+    lossless_valid_adv LA E (resolve A RUN tt) →
+    bad_id \notin domm LA →
+    (∀ s₀ s₁, I (s₀, s₁) → get_heap s₀ (bad_loc bad_id) = get_heap s₁ (bad_loc bad_id)) →
+    (∀ s₀ s₁, get_heap s₀ (bad_loc bad_id) = true → get_heap s₁ (bad_loc bad_id) = true → I (s₀, s₁)) →
+    eq_up_to_bad E I bad_id p₀ p₁ →
+    bad_preserved E bad_id p₀ →
+    bad_preserved E bad_id p₁ →
+    AdvantageE p₀ p₁ A <= Pr_bad (A ∘ p₀) bad_id true.
+Proof.
+  intros L₀ L₁ LA E p₀ p₁ I bad_id A vp₀ vp₁ vA hI hIe hd₀ hd₁ Hlva Hfresh Hsync HbadI hp hbp0 hbp1.
+  unfold AdvantageE, Pr, Pr_bad.
+  pose r := resolve A RUN tt.
+  unshelve epose proof (eq_up_to_bad_adversary_link p₀ p₁ I bad_id r hI Hlva Hfresh Hsync HbadI hp hbp0 hbp1) as h.
+  1:{
+    eapply valid_resolve.
+    - eauto.
+    - apply RUN_in_A_export.
+  }
+  unfold Pr_op.
+  unshelve epose (rhs := thetaFstd _ (repr (code_link r p₀)) empty_heap).
+  simpl in rhs.
+  epose (lhs := Pr_op (A ∘ p₀) RUN tt empty_heap).
+  assert (lhs = rhs) as he.
+  { subst lhs rhs.
+    unfold Pr_op. unfold Pr_code.
+    unfold thetaFstd. simpl. apply f_equal2. 2: reflexivity.
+    apply f_equal. apply f_equal.
+    by rewrite resolve_link.
+  }
+  unfold lhs in he. unfold Pr_op in he.
+  rewrite he.
+  unshelve epose (rhs' := thetaFstd _ (repr (code_link r p₁)) empty_heap).
+  simpl in rhs'.
+  epose (lhs' := Pr_op (A ∘ p₁) RUN tt empty_heap).
+  assert (lhs' = rhs') as e'.
+  { subst lhs' rhs'.
+    unfold Pr_op. unfold Pr_code.
+    unfold thetaFstd. simpl. apply f_equal2. 2: reflexivity.
+    apply f_equal. apply f_equal.
+    by rewrite resolve_link.
+  }
+  unfold lhs' in e'. unfold Pr_op in e'.
+  rewrite e'.
+  unfold rhs', rhs.
+  unfold SDistr_bind. unfold SDistr_unit.
+  rewrite !dletE.
+  assert (
+    ∀ y,
+      (λ x : prod_choiceType (tgt RUN) heap, (y x) * (let '(b, _) := x in dunit (R:=R) (T:=tgt RUN) b) true) =
+      (λ x : prod_choiceType (tgt RUN) heap, (x.1 == true)%:R * (y x))
+  ) as Hrew.
+  { intros y. extensionality x.
+    destruct x as [x1 x2].
+    rewrite dunit1E.
+    simpl. rewrite GRing.mulrC. reflexivity.
+  }
+  rewrite !Hrew.
+  assert (
+    ∀ y : prod_choiceType (tgt RUN) heap -> R,
+      (λ x : prod_choiceType (tgt RUN) heap, (y x) * (let '(_, s) := x in dunit (R:=R) (T:=bad_loc bad_id) (get_heap s (bad_loc bad_id))) true) =
+      (λ x : prod_choiceType (tgt RUN) heap, (get_heap x.2 (bad_loc bad_id) == true)%:R * (y x))
+  ) as Hrew2.
+  { intros y. extensionality x.
+    destruct x as [x1 x2].
+    rewrite dunit1E.
+    simpl. rewrite GRing.mulrC. reflexivity.
+  }
+  rewrite Hrew2.
+  pose (event := fun x : prod_choiceType (tgt RUN) heap => x.1 == true).
+  pose (bad := fun x : prod_choiceType (tgt RUN) heap => get_heap x.2 (bad_loc bad_id) == true).
+  pose proof (@Pr_bound (tgt RUN) heap event bad I
+                (fun '(b₀,s₀) '(b₁,s₁) => I (s₀,s₁) ∧ (get_heap s₀ (bad_loc bad_id) = false → b₀ = b₁))
+                (repr (code_link r p₀)) (repr (code_link r p₁)) h empty_heap empty_heap hIe) as Hb.
+  have Hag : (∀ x y : tgt RUN * heap,
+     (λ '(b₀, s₀) '(b₁, s₁),
+        I (s₀, s₁) ∧ (get_heap s₀ (bad_loc bad_id) = false → b₀ = b₁))
+       x y
+     → bad x = false → event x = event y).
+  { move=> [b0 s0] [b1 s1] [_ Himp] /= /eqP Hbadx.
+    rewrite /event /=. congr (_ == true). apply: Himp.
+    case: (get_heap s0 (bad_loc bad_id)) Hbadx => //. }
+  specialize (Hb Hag).
+  unfold TransformingLaxMorph.rlmm_from_lmla_obligation_1. simpl.
+  unfold SubDistr.SDistr_obligation_2. simpl.
+  unfold OrderEnrichedRelativeAdjunctionsExamples.ToTheS_obligation_1.
+  rewrite !SDistr_rightneutral. simpl.
+  rewrite /StateTransfThetaDens.unaryStateBeta'_obligation_1.
+  exact: Hb.
 Qed.
