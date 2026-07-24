@@ -80,6 +80,7 @@ theories/Crypt/Package.v
 # State + Prob
 theories/Crypt/rules/RulesStateProb.v
 theories/Crypt/rules/UniformStateProb.v
+theories/Crypt/rules/UpToBadState.v
 
 # Nominal
 theories/Crypt/nominal/Nominal.v
