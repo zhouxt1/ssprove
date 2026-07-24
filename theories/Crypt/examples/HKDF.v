@@ -74,7 +74,7 @@ From SSProve.Mon Require Import SPropBase.
 From SSProve.Crypt Require Import Axioms ChoiceAsOrd SubDistr Couplings
   UniformDistrLemmas FreeProbProg Theta_dens RulesStateProb
   pkg_core_definition choice_type pkg_composition pkg_rhl Package Prelude
-  pkg_lossless pkg_upto_bad.
+  pkg_lossless pkg_upto_bad UpToBadState.
 
 From Stdlib Require Import Utf8.
 From extructures Require Import ord fset fmap.
@@ -499,6 +499,40 @@ Section HKDF_example.
       | None => True
       end.
 
+  (* [used_prk_loc]'s domain is exactly [extract_loc]'s range -- an
+    invariant each game maintains of its OWN ghost bookkeeping alone
+    (every fresh [prk] sample immediately registers itself), needed
+    here to know a freshly-sampled [prk] with [Used prk = None] can't
+    collide with any [ss'] already extracted, which is what lets
+    [mid_bad_match] survive extending both tables. *)
+  Definition used_prk_correspondence
+    (T : chMap 'ss 'prk) (U : chMap 'prk 'unit) : Prop :=
+    ∀ prk, getm U prk = Some tt ↔ (∃ ss, getm T ss = Some prk).
+
+  (* [extract_loc] is injective on its domain -- a consequence of the
+    games' own semantics (bad_loc only ever fires on a genuine
+    collision) that isn't implied by [used_prk_correspondence] alone,
+    but is needed to show [mid_bad_match] survives extending
+    [mid_loc]/[indep_loc] at a *specific* (already-extracted) [ss]:
+    without it, some OTHER [ss'] could share the same [prk] and see
+    its own [mid_loc] entry silently change. *)
+  Definition extract_injective (T : chMap 'ss 'prk) : Prop :=
+    ∀ ss1 ss2 prk, getm T ss1 = Some prk → getm T ss2 = Some prk → ss1 = ss2.
+
+  (* [mid_loc]/[indep_loc] only ever gain an entry keyed at a [prk]/[ss]
+    that has already been extracted -- a consequence of the games' own
+    semantics ([mid_loc]/[indep_loc] are only written to after [prk]/[ss]
+    is already determined) needed to know a FRESHLY-sampled [prk] (not
+    yet in [extract_loc]'s range) can't already have a [mid_loc] entry,
+    which is what lets [mid_bad_match] extend to a brand new [ss]. *)
+  Definition mid_loc_fresh
+    (T : chMap 'ss 'prk) (Tm : chMap ('prk × 'info) 'out) : Prop :=
+    ∀ prk info, getm Tm (prk, info) <> None → ∃ ss, getm T ss = Some prk.
+
+  Definition indep_loc_fresh
+    (T : chMap 'ss 'prk) (Ti : chMap ('ss × 'info) 'out) : Prop :=
+    ∀ ss info, getm Ti (ss, info) <> None → getm T ss <> None.
+
   Definition KDF_mid'_bad_locs := unionm KDF_mid'_locs KDF_bad_locs.
 
   Definition KDF_mid'_bad_inv : precond :=
@@ -507,7 +541,9 @@ Section HKDF_example.
     rel_app [:: (lhs, bad_loc); (lhs, extract_loc); (lhs, mid_loc); (lhs, used_prk_loc);
                 (rhs, extract_loc); (rhs, used_prk_loc); (rhs, indep_loc)]
       (fun b T Tm U T' U' Ti =>
-         b = false -> T = T' ∧ U = U' ∧ mid_bad_match T Tm Ti).
+         b = false →
+         T = T' ∧ U = U' ∧ mid_bad_match T Tm Ti ∧ used_prk_correspondence T U
+         ∧ extract_injective T ∧ mid_loc_fresh T Tm ∧ indep_loc_fresh T Ti).
 
   Lemma KDF_mid'_bad_Invariant : Invariant KDF_mid'_locs KDF_bad_locs KDF_mid'_bad_inv.
   Proof.
@@ -519,7 +555,8 @@ Section HKDF_example.
         * done.
     - eapply SemiInvariant_relApp.
       + simpl. repeat split. all: try fmap_solve; try done.
-      + done.
+      + simpl. move=> _. repeat split=>//.
+        move=> [ss Hss]. move: Hss. by rewrite /heap_init.
   Qed.
 
   (* [bad_id := 4] throughout: [bad_loc] (this section) and
@@ -682,6 +719,11 @@ Section HKDF_example.
              ++ apply: blm_sampler => y0. apply: blm_putr_other; [done | exact: blm_ret].
       + exact: (Pr_code_lossless_bad KDF_bad_locs _ Hlv Hm h Hb).
   Qed.
+
+  Lemma KDF_mid'_KDF_bad_eq_up_to_bad :
+    eq_up_to_bad DERIVE_export KDF_mid'_bad_inv 4 KDF_mid' KDF_bad.
+  Proof.
+  Admitted.
 
   Local Open Scope ring_scope.
 

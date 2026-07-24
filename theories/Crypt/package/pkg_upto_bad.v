@@ -249,16 +249,14 @@ Lemma eq_up_to_bad_adversary_link :
     bad_id \notin domm LA →
     (∀ s₀ s₁, I (s₀, s₁) →
        get_heap s₀ (bad_loc bad_id) = get_heap s₁ (bad_loc bad_id)) →
-    (∀ s₀ s₁, get_heap s₀ (bad_loc bad_id) = true →
-       get_heap s₁ (bad_loc bad_id) = true → I (s₀, s₁)) →
     eq_up_to_bad E I bad_id p₀ p₁ →
     bad_preserved E bad_id p₀ →
     bad_preserved E bad_id p₁ →
     r⊨ ⦃ I ⦄ code_link A p₀ ≈ code_link A p₁
       ⦃ λ '(b₀, s₀) '(b₁, s₁),
-          I (s₀, s₁) ∧ (get_heap s₀ (bad_loc bad_id) = false → b₀ = b₁) ⦄.
+          get_heap s₀ (bad_loc bad_id) = false → I (s₀, s₁) ∧ b₀ = b₁ ⦄.
 Proof.
-  intros L₀ L₁ LA E p₀ p₁ I bad_id B A vp₀ vp₁ vA hLA Hlva Hfresh Hsync HbadI hp hbp0 hbp1.
+  intros L₀ L₁ LA E p₀ p₁ I bad_id B A vp₀ vp₁ vA hLA Hlva Hfresh Hsync hp hbp0 hbp1.
   induction Hlva as [x | o x k Ho k' IH | l k Hl k' IH | l v k Hl IH | op k Hop k' IH] in vA |- *.
   - cbn - [semantic_judgement].
     eapply weaken_rule. 1: apply ret_rule.
@@ -266,7 +264,7 @@ Proof.
     cbn. unfold SPropMonadicStructures.SProp_op_order.
     unfold Basics.flip, SPropMonadicStructures.SProp_order.
     intros [HI Hp].
-    apply Hp. split; [exact: HI | done].
+    apply Hp. move=> Hb. split; [exact: HI | done].
   - cbn - [semantic_judgement].
     apply inversion_valid_opr in vA as hA. destruct hA as [hi vk].
     have vp₀' := vp₀. have vp₁' := vp₁.
@@ -299,17 +297,13 @@ Proof.
         cbn in Heq1, Heq2. subst s1 s2.
         have Hm1 := (theta_bad_lossless bad_id (code_link (k a₀) p₀) s₀
                       (bad_preserved_link (L:=L₀) p₀ bad_id (k a₀) (k' a₀) Hfresh hbp0 s₀ Hbad)).2 a1 s1' Hgt1.
-        have Hm2 := (theta_bad_lossless bad_id (code_link (k a₁) p₁) s₁
-                      (bad_preserved_link (L:=L₁) p₁ bad_id (k a₁) (k' a₁) Hfresh hbp1 s₁ Hbad1)).2 a2 s2' Hgt2.
-        move: (Hm1 vp₀' (vk a₀)) (Hm2 vp₁' (vk a₁)) => {}Hm1 {}Hm2.
-        split.
-        { exact: (HbadI s1' s2' Hm1 Hm2). }
-        { rewrite Hm1. discriminate. }
+        move: (Hm1 vp₀' (vk a₀)) => {}Hm1.
+        rewrite Hm1. discriminate.
     + move: Hbad => /negbTE Hbad.
       move: (Hcond Hbad) => Heq. subst a₁.
       eapply pre_weaken_rule. 1: eapply IH.
       * eapply vk.
-      * cbn. intros s₀' s₁' [? ?]. subst. auto.
+      * cbn. intros s₀' s₁' Hpost. case: Hpost => -> ->. exact: HI.
   - cbn - [semantic_judgement bindrFree].
     apply inversion_valid_getr in vA as hA. destruct hA as [hi vk].
     match goal with
@@ -394,16 +388,15 @@ Lemma eq_upto_bad_perf_ind :
     lossless_valid_adv LA E (resolve A RUN tt) →
     bad_id \notin domm LA →
     (∀ s₀ s₁, I (s₀, s₁) → get_heap s₀ (bad_loc bad_id) = get_heap s₁ (bad_loc bad_id)) →
-    (∀ s₀ s₁, get_heap s₀ (bad_loc bad_id) = true → get_heap s₁ (bad_loc bad_id) = true → I (s₀, s₁)) →
     eq_up_to_bad E I bad_id p₀ p₁ →
     bad_preserved E bad_id p₀ →
     bad_preserved E bad_id p₁ →
     AdvantageE p₀ p₁ A <= Pr_bad (A ∘ p₀) bad_id true.
 Proof.
-  intros L₀ L₁ LA E p₀ p₁ I bad_id A vp₀ vp₁ vA hI hIe hd₀ hd₁ Hlva Hfresh Hsync HbadI hp hbp0 hbp1.
+  intros L₀ L₁ LA E p₀ p₁ I bad_id A vp₀ vp₁ vA hI hIe hd₀ hd₁ Hlva Hfresh Hsync hp hbp0 hbp1.
   unfold AdvantageE, Pr, Pr_bad.
   pose r := resolve A RUN tt.
-  unshelve epose proof (eq_up_to_bad_adversary_link p₀ p₁ I bad_id r hI Hlva Hfresh Hsync HbadI hp hbp0 hbp1) as h.
+  unshelve epose proof (eq_up_to_bad_adversary_link p₀ p₁ I bad_id r hI Hlva Hfresh Hsync hp hbp0 hbp1) as h.
   1:{
     eapply valid_resolve.
     - eauto.
@@ -462,16 +455,18 @@ Proof.
   pose (event := fun x : prod_choiceType (tgt RUN) heap => x.1 == true).
   pose (bad := fun x : prod_choiceType (tgt RUN) heap => get_heap x.2 (bad_loc bad_id) == true).
   pose proof (@Pr_bound (tgt RUN) heap event bad I
-                (fun '(b₀,s₀) '(b₁,s₁) => I (s₀,s₁) ∧ (get_heap s₀ (bad_loc bad_id) = false → b₀ = b₁))
+                (fun '(b₀,s₀) '(b₁,s₁) => get_heap s₀ (bad_loc bad_id) = false → I (s₀,s₁) ∧ b₀ = b₁)
                 (repr (code_link r p₀)) (repr (code_link r p₁)) h empty_heap empty_heap hIe) as Hb.
   have Hag : (∀ x y : tgt RUN * heap,
      (λ '(b₀, s₀) '(b₁, s₁),
-        I (s₀, s₁) ∧ (get_heap s₀ (bad_loc bad_id) = false → b₀ = b₁))
+        get_heap s₀ (bad_loc bad_id) = false → I (s₀, s₁) ∧ b₀ = b₁)
        x y
      → bad x = false → event x = event y).
-  { move=> [b0 s0] [b1 s1] [_ Himp] /= /eqP Hbadx.
-    rewrite /event /=. congr (_ == true). apply: Himp.
-    case: (get_heap s0 (bad_loc bad_id)) Hbadx => //. }
+  { move=> [b0 s0] [b1 s1] Himp /= /eqP Hbadx.
+    have Hb0 : get_heap s0 (bad_loc bad_id) = false.
+    { case: (get_heap s0 (bad_loc bad_id)) Hbadx => //. }
+    have [_ Heq] := Himp Hb0.
+    rewrite /event /=. congr (_ == true). exact: Heq. }
   specialize (Hb Hag).
   unfold TransformingLaxMorph.rlmm_from_lmla_obligation_1. simpl.
   unfold SubDistr.SDistr_obligation_2. simpl.
