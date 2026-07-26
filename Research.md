@@ -16,21 +16,34 @@ did not have this piece, so most of this effort has gone into building it
 from scratch as reusable infrastructure, alongside the concrete example
 that needs it.
 
-**As of this writing, the entire up-to-bad construction is complete and
-proved (0 admits) end to end**, from the pure probability lemma through
-to an actual `AdvantageE` bound. What remains is applying it to HKDF.v's
-own proof obligations (see Section 10).
+**Update (this pass): the up-to-bad infrastructure, the birthday-bound
+step (step 2, `KDF_mid_KDF_ideal_bound`/`security_of_KDF`), and the
+`COUNT`-based query-bound formalization are now ALL complete and proved
+(0 admits) end to end** — `security_of_KDF` is a fully `Qed`'d theorem,
+independently confirmed via `Print Assumptions` to rest on nothing but
+standard classical-logic axioms plus the pre-existing library axiom
+`__admitted__interchange_psum`. What remains is entirely confined to
+**step 1** (`KDF_real_KDF_mid_bound`, the dynamic-key hybrid argument
+swapping real-PRF for ideal-random one distinct shared secret at a
+time): 3 precisely-diagnosed, currently `Admitted` lemmas, all blocked
+by the same root cause (see Section 11).
 
 ## 2. Status at a glance
 
 | Piece | File | Status |
 |---|---|---|
-| Birthday-bound combinatorics | `theories/Crypt/examples/Birthday.v` | Proved, 0 admits |
-| Hop 1 of hybrid chain (`KDF_real_KDF_hyb0_equiv`) | `theories/Crypt/examples/HKDF.v` | Proved, 0 admits |
-| Hop 2 of hybrid chain (`KDF_hyb_KDF_hyb_EVAL_true_equiv`) | `theories/Crypt/examples/HKDF.v` | 3 of 4 leaves proved; 1 leaf `admit`ted, ready to be closed with the now-complete up-to-bad machinery |
-| Hop 3 of hybrid chain | `theories/Crypt/examples/HKDF.v` | Not started |
-| `KDF_mid_KDF_ideal_bound` (the birthday connection) | `theories/Crypt/examples/HKDF.v` | `Admitted` stub only; not started beyond the pure-math result in `Birthday.v` |
-| Final assembly `KDF_real_KDF_mid_bound` | `theories/Crypt/examples/HKDF.v` | Not started |
+| Birthday-bound combinatorics (`bad_dist`/`bad_dist_bound`, generalized to arbitrary `finType`) | `theories/Crypt/examples/Birthday.v` | **Proved, 0 admits** |
+| `COUNT` query-bound wrapper (redesigned to be unconditionally lossless — see Section 11) | `theories/Crypt/examples/HKDF.v` | **Proved, 0 admits** |
+| `KDF_mid'_KDF_bad_eq_up_to_bad` (the up-to-bad relational proof between the two birthday-step ghost games) | `theories/Crypt/examples/HKDF.v` | **Proved, 0 admits** (~700 lines) |
+| `KDF_mid'_KDF_bad_bound` (`eq_upto_bad_perf_ind` applied) | `theories/Crypt/examples/HKDF.v` | **Proved, 0 admits** |
+| `Pr_bad_adv_bound`/`Pr_bad_COUNT_KDF_mid'_bound` (the birthday-combinatorics connector: bounding the actual run's `Pr[bad]` via `Birthday.v`'s `bad_dist_bound`) | `theories/Crypt/examples/HKDF.v` | **Proved, 0 admits** |
+| **`KDF_mid_KDF_ideal_bound`** (step 2, the birthday bound itself) | `theories/Crypt/examples/HKDF.v` | **Proved, 0 admits** |
+| **`security_of_KDF`** (final top-level theorem) | `theories/Crypt/examples/HKDF.v` | **`Qed`'d**, resting only on step 1's 3 remaining admits (below) plus standard axioms |
+| Hop 1 of step-1 hybrid chain (`KDF_real_KDF_hyb0_equiv`, redone for the `ss`-indexed redesign) | `theories/Crypt/examples/HKDF.v` | **Proved, 0 admits** |
+| `KDF_hyb_KDF_hyb_EVAL_true_equiv` | `theories/Crypt/examples/HKDF.v` | `Admitted` — root cause diagnosed precisely, fix designed but not carried out (Section 11) |
+| `KDF_hyb_KDF_hyb_EVAL_false_equiv` | `theories/Crypt/examples/HKDF.v` | `Admitted` — same root cause |
+| `COUNT_KDF_hyb_q_KDF_mid_equiv` | `theories/Crypt/examples/HKDF.v` | `Admitted` — needs the same adversary-code-induction technique as `Pr_bad_adv_bound`, not yet carried out |
+| Final assembly `KDF_real_KDF_mid_bound` | `theories/Crypt/examples/HKDF.v` | **Mechanically `Qed`'d already** (the induction/triangle-inequality assembly itself needs no new probabilistic reasoning) — its only remaining dependencies are the 3 admits directly above |
 | Up-to-bad semantic core (`pr_up_to_bad`) | `theories/Crypt/rhl_semantics/only_prob/UpToBad.v` | **Proved, 0 admits** |
 | Independent/product coupling (`indp`, `indp_lmg`, `indp_rmg`, `indp_coupling`) | same file | **Proved, 0 admits** |
 | `independent_rule` (combine two unary facts into a relational judgement) | `theories/Crypt/rules/UpToBadState.v` | **Proved, 0 admits** |
@@ -40,10 +53,22 @@ own proof obligations (see Section 10).
 | **`eq_up_to_bad_adversary_link`** (the main adversary-linking induction) | same file | **Proved, 0 admits** |
 | `Pr_bound`, `Pr_bad`, **`eq_upto_bad_perf_ind`** (the top-level Fundamental Lemma: `AdvantageE p₀ p₁ A <= Pr_bad (A ∘ p₀) bad_id true`) | same file | **Proved, 0 admits** |
 
-All committed/pushed work compiles cleanly via the project's real build
-(`make -f Makefile.rocq <file>.vo`), verified independently of the IDE
-(see Section 9, "tooling gotchas" — the IDE's own diagnostics are
-unreliable in this environment).
+`pkg_upto_bad.v` (and all other core/shared files) were **deliberately
+left untouched** throughout the `COUNT`/birthday-bound/step-1 work below
+— every fix was kept local to `HKDF.v` (and, for the birthday-bound
+combinatorics, `Birthday.v`), to avoid changing shared infrastructure
+other proofs might come to depend on. See Section 11 for why an
+apparently-natural generalization of `pkg_upto_bad.v` was considered and
+rejected in favor of a local fix.
+
+All work compiles cleanly via the project's real build
+(`make -f Makefile.rocq <file>.vo`) and a full project rebuild, verified
+independently of the IDE (see Section 9, "tooling gotchas" — the IDE's
+own diagnostics are unreliable in this environment), and independently
+double-checked via `Print Assumptions` on `KDF_mid_KDF_ideal_bound`/
+`security_of_KDF` (not just trusting a reported `Qed`). None of this
+work has been committed yet, per a standing instruction to hold off
+until step 1 is also fully closed.
 
 ## 3. Why a generic "up-to-bad" lemma is unavoidable here
 
@@ -585,40 +610,343 @@ took real trial and error, independent of the proof content:
   `t:realType` unless fully explicit (`@lemma R ...`) is used in both
   the term and any type ascription.
 
-## 10. Immediate next steps (where to resume)
+## 10. Applying the up-to-bad machinery: `COUNT`, the birthday bound, and the `ss`-indexing redesign
 
-The up-to-bad infrastructure is done. What's left is *applying* it:
+Sections 1-9 above describe the up-to-bad *infrastructure* (all done, 0
+admits, and never touched again after this point). This section covers
+everything built on top of it, in the order it happened.
 
-1. **Hop 2's blocked leaf** (`KDF_hyb_KDF_hyb_EVAL_true_equiv`'s 4th
-   case, `theories/Crypt/examples/HKDF.v`, currently `admit`ted): pick a
-   concrete `bad_id` (HKDF.v already has `bad_loc := mkloc 4 (false :
-   bool)` from an earlier, abandoned attempt — reuse that key/slot),
-   instantiate `eq_up_to_bad_adversary_link`/`eq_upto_bad_perf_ind` (or
-   more likely just the underlying pieces directly, since this leaf is
-   INSIDE a hop proof, not a standalone `AdvantageE` goal — may need a
-   variant entry point that doesn't go through `Pr_op`/`RUN`/`empty_heap`
-   at all, but instead applies `eq_up_to_bad_adversary_link` directly at
-   whatever intermediate heap state the leaf's proof is already at).
-   Will need to establish `eq_up_to_bad`/`bad_preserved` for the
-   specific two games being compared at that leaf, plus
-   `lossless_valid_adv` for the adversary code in play there.
-2. **`KDF_mid_KDF_ideal_bound`**: apply `eq_upto_bad_perf_ind` at the
-   top level (this one likely DOES fit the `AdvantageE`-shaped entry
-   point directly, being a top-level bound between two full games) to
-   get `AdvantageE KDF_mid KDF_ideal A <= Pr_bad (A ∘ KDF_mid) bad_id
-   true`, then connect `Pr_bad (... ) bad_id true` to the pure
-   combinatorial `birthday_bound q` from `Birthday.v` — this last step
-   (bounding the actual probability that `bad_loc` fires, given the
-   sampling structure of `KDF_mid`) has not been investigated at all
-   yet and is a genuinely separate piece of work from everything above.
-3. **Hop 3** (`KDF_hyb_EVAL i ∘ EVAL false ≈₀ KDF_hyb i.+1`) — not
-   started at all.
-4. **Final assembly** `KDF_real_KDF_mid_bound` — induction on `i` +
-   `Advantage_triangle`/`Advantage_triangle_chain`, mirroring how
-   `PRFPRG.v`'s `hyb_security_based_on_prf` assembles its own hybrid
-   argument (a good, directly-reusable-pattern precedent, unlike
-   `HybridArgument.v` which needs the nominal-layer framework switch we
-   ruled out). Also update the theorem's conclusion shape from the
-   current placeholder (`\sum_(i<q) prf_epsilon A`) to the correct
-   hybrid-reduction shape (`\sum_(i<q) prf_epsilon (A ∘ KDF_hyb_EVAL_pkg
-   i)`), matching `PRFPRG.v`'s pattern.
+### 10a. The birthday step (`KDF_mid_KDF_ideal_bound`) — now fully done
+
+1. Built the ghost game `KDF_mid'` (real Extract + ideal Expand, plus
+   `KDF_bad`-style `bad_loc`/`used_prk_loc` bookkeeping) and proved
+   `KDF_mid ≈₀ KDF_mid'` (exact equivalence, mirroring
+   `KDF_real_KDF_hyb0_equiv`'s ignore-invariant style).
+2. Designed `KDF_mid'_bad_inv` (a `heap_ignore ⋊ syncs ⋊ rel_app` stack,
+   left-associative `⋊`) relating `KDF_mid'` and `KDF_bad`, and proved
+   `KDF_mid'_KDF_bad_eq_up_to_bad : eq_up_to_bad DERIVE_export
+   KDF_mid'_bad_inv 4 KDF_mid' KDF_bad` — a ~700-line relational proof,
+   the single largest individual proof in this whole effort. `bad_loc`
+   fires exactly when Extract's lazily-sampled table assigns the same
+   `prk` to two different shared secrets (the birthday collision).
+3. Applied `eq_upto_bad_perf_ind` (Section 4h) to get
+   `KDF_mid'_KDF_bad_bound : AdvantageE KDF_mid' KDF_bad A <= Pr_bad (A
+   ∘ KDF_mid') 4 true`.
+4. **Formalizing "the adversary makes at most `q` queries".** `A` is an
+   arbitrary adversary with no built-in query bound, so `Pr_bad(...) <=
+   birthday_bound q` can't hold for a free `q` without *some* way to tie
+   `q` to `A`'s behavior. Two established SSProve conventions exist for
+   this: (a) `PRFPRG.v`'s `security_based_on_prf` leaves `q` free and
+   adds a side hypothesis pinning down which `q` applies to a given `A`
+   (with an explicit comment admitting such a `q` "might not exist for
+   some adversaries"); (b) `PKE/Scheme.v`'s `COUNT`/`MI_COUNT` wrapper,
+   which `#assert`s a per-call counter `< q` before answering — making
+   the bound unconditionally true for *any* adversary, since queries
+   past the `q`-th just get zero-mass `fail`. We chose (b) — an
+   unconditional theorem is strictly better than one with an existence
+   caveat.
+5. **First design of `COUNT q` (later found broken, then fixed):**
+   mirroring `Scheme.v`'s own `#assert count < q` exactly. This
+   compiled and three `≈₀`-based "push `COUNT q` through a perfect
+   equivalence via `Advantage_link`" triangle legs went through fine
+   (`COUNT_KDF_mid_KDF_mid'_bound`, `COUNT_KDF_bad_KDF_ideal_bound`,
+   `COUNT_link_valid`) — because exact-match `≈₀`/`eq_rel_perf_ind`
+   reasoning places no losslessness requirement on either side.
+6. **The `#assert` design turned out to be structurally incompatible
+   with up-to-bad reasoning.** Applying `eq_upto_bad_perf_ind` at the
+   composed adversary `A ∘ COUNT q` needs `lossless_valid_adv LA'
+   DERIVE_export (resolve (A ∘ COUNT q) RUN tt)`. Since `resolve (A ∘
+   COUNT q) RUN tt` literally splices `COUNT q`'s own `count ← get
+   count_loc ;; #assert count < q ;; ...` in at every one of `A`'s
+   `DERIVE` calls, and `lossless_valid_adv`'s `getr` case demands
+   losslessness for **every** possible value the `get` could return
+   (not just reachable ones — confirmed directly against `pkg_upto_bad.v`'s
+   literal `lva_getr` constructor, which has no reachability caveat),
+   this obligation is unconditionally FALSE for any `count >= q` reading
+   (where `#assert` reduces to `fail`, zero mass — `dnull` is not a
+   `LosslessOp`). `bad_preserved` has the identical problem from the
+   other direction (it quantifies over an arbitrary heap, not just a
+   reachable one). This is not a proof-difficulty problem, it's a type
+   mismatch between "sub-distribution" and "the full probability
+   distribution `independent_rule`'s product coupling genuinely needs."
+7. **Two possible fixes were considered**: (A) generalize
+   `lossless_valid_adv`/`bad_preserved`/`eq_upto_bad_perf_ind` in
+   `pkg_upto_bad.v` to be relative to a heap-reachability invariant —
+   rejected as a shared-infrastructure change with a large blast radius,
+   and (on closer analysis) one that would ITSELF need an "adversary
+   makes ≤ q queries" assumption to discharge the relativized
+   obligation soundly, quietly reintroducing exactly the existence
+   caveat `COUNT` was meant to avoid. (B) **Redesign `COUNT q` itself to
+   never fail at all**: past the `q`-th query, route to an independent
+   uniform sample instead of asserting:
+   ```coq
+   Definition COUNT (q : nat) : package DERIVE_export DERIVE_export :=
+     [package [fmap count_loc] ;
+       #def #[ DERIVE ] ('(ss, info) : 'ss × 'info) : 'out
+       {
+         #import {sig #[ DERIVE ] : 'ss × 'info → 'out } as derive ;;
+         count ← get count_loc ;;
+         if count < q then
+           #put count_loc := count.+1 ;; derive (ss, info)
+         else
+           y <$ uniform Out_N ;; ret y
+       }
+     ].
+   ```
+   This is unconditionally lossless for *every* value of `count_loc`
+   (both branches are lossless), so `lossless_valid_adv` is now
+   establishable with **zero changes to `pkg_upto_bad.v`** — and the
+   dummy branch costs no extra advantage (it's exactly as independent
+   of everything as `KDF_ideal`'s own output). Chose (B).
+8. Built `lossless_valid_adv_COUNT_link` (a new composition lemma —
+   confirmed via grep that `pkg_upto_bad.v` has no existing `code_link`
+   compatibility lemma for `lossless_valid_adv`, so this had to be built
+   from scratch, by structural induction on the adversary's own code
+   mirroring `bad_preserved_link`'s shape) and
+   `COUNT_KDF_mid'_KDF_bad_bound` (instantiating
+   `KDF_mid'_KDF_bad_bound` at the composed adversary `A ∘ COUNT q`).
+9. **The actual birthday combinatorics connector**,
+   `Pr_bad_adv_bound`/`Pr_bad_COUNT_KDF_mid'_bound`: bounding
+   `Pr_bad ((A ∘ COUNT q) ∘ KDF_mid') 4 true <= birthday_bound q` for an
+   ARBITRARY adversary. Key structural fact: a repeat `ss` query costs
+   no fresh `prk` sample at all, so only fresh-`ss` queries advance the
+   birthday process, and `COUNT q` bounds the number of those to at
+   most `q`. Proved by induction on the adversary's own code (mirroring
+   `pkg_upto_bad.v`'s `eq_up_to_bad_adversary_link`/`bad_preserved_link`
+   recursion over `code_link`), carrying the current heap and bounding
+   `Pr[bad ends true]` by `Birthday.bad_bound (q - count) #|used_prk_loc|`
+   (or `1` if already bad) — a per-step union-bound argument
+   (`Birthday.v`'s `expectation_le_bad_bound`, extracted from
+   `bad_dist_bound`'s own inductive step as a reusable lemma) interleaved
+   with the adversary-code induction, rather than `bad_dist_bound`'s own
+   induction on a fixed, static query count. `Birthday.v` itself was
+   generalized from a fixed `Context (N : nat)` to `Context (F :
+   finType)` to support this. Instantiating at `empty_heap` and closing
+   with the trivial arithmetic `bad_bound_le_birthday_bound` (`bad_bound
+   q 0 <= birthday_bound q`) finishes `KDF_mid_KDF_ideal_bound` and
+   `security_of_KDF`, both now fully `Qed`'d.
+10. One diagnostic pitfall hit along the way: calling `fmap_solve`
+    repeatedly in a context accumulating prior `have`-introduced proof
+    terms caused catastrophic slowdown (one call: ~14s; two: still
+    running after 150s+). Fixed by hoisting the needed `fhas` facts into
+    standalone top-level lemmas proved in isolation, then using them as
+    plain terms inline.
+
+### 10b. Step 1 (`KDF_real_KDF_mid_bound`) — in progress, 3 admits left
+
+`KDF_hyb i`/`KDF_hyb_EVAL i` (the per-distinct-PRK hybrid family) and
+`KDF_hyb_KDF_hyb_EVAL_true_equiv` pre-date this pass and were blocked.
+Reading the blocked proof's own comments identified the root cause:
+`get_prk_idx` assigned indices **by PRK** (`prk_index_loc`), sampling
+`prk` *before* deciding its index — so "is this the `i`-th distinct
+key?" depended on the just-sampled `prk` value itself, leaving no
+still-pending sample to couple against `EVAL`'s own fresh key (unlike
+`PRFPRG.v`, whose hybrid index is a raw query counter, decided
+independently of any sampled value).
+
+**Fix**: index by **shared secret** (`ss`), not by PRK — sound
+specifically for this step because (unlike step 2) it doesn't need to
+track PRK collisions at all. Replaced `get_prk_idx`/`prk_index_loc`/
+`prk_count_loc` with decoupled `get_ss_idx`/`get_prk`/`ss_index_loc`/
+`ss_count_loc`, and redefined `KDF_hyb`/`KDF_hyb_EVAL` accordingly.
+`KDF_real_KDF_hyb0_equiv` was redone for the new design and re-`Qed`'d.
+
+**A second, independent bug was found and fixed** while restating the
+final theorems for the new design: `prf_epsilon A` (for the *bare*
+top-level adversary `A`, whose import interface is `DERIVE_export`) is
+provably `0` for every valid `A`, since `Advantage`/`AdvantageE`/`Pr_op`
+place no static interface constraint on their arguments (they're raw
+functions of `raw_package`), and `A`'s own code structurally never
+calls `EVAL_export`'s operation id at all — so composing it with `EVAL
+true`/`EVAL false` is a complete no-op, making the two sides identical
+and the advantage exactly `0` (counterexample confirming the original
+statement was simply false in general: `PRF info prk := info`). This
+means the versions of `KDF_real_KDF_mid_bound`/`security_of_KDF` from
+earlier in this pass (using bare `prf_epsilon A`) were WRONG statements
+(they compiled as `Admitted` stubs, which Rocq doesn't check for
+truth). Fixed by composing `A` with `KDF_hyb_EVAL i` first
+(`prf_epsilon ((A ∘ COUNT q) ∘ KDF_hyb_EVAL i)`), exactly matching
+`PRFPRG.v`'s own `hyb_security_based_on_prf` convention
+(`prf_epsilon (A ∘ GEN_HYB_EVAL_pkg i)`).
+
+With the redesign and the bugfix in place, the mechanical assembly of
+`KDF_real_KDF_mid_bound`/`security_of_KDF` (the `elim: q` / 4-way
+triangle argument, mirroring `hyb_security_based_on_prf` exactly) is
+**already `Qed`'d** — it type-checks and composes correctly right now,
+resting on exactly 3 remaining lemmas, all `Admitted` with precisely
+diagnosed (not vague) remaining gaps — see Section 11.
+
+## 11. Current blocker: `extract_loc`/`eval_key_loc` divergence in the `ss`-indexed hybrid step
+
+Interactively closing `KDF_hyb_KDF_hyb_EVAL_true_equiv`'s case tree
+against the `ss`-indexed redesign succeeded for **every branch except
+one**: all "idx already known" branches (`< i`, `= i`, `> i`), and the
+"freshly discovered, new idx `< i`" and "new idx `> i`" branches, close
+cleanly with the invariant as originally stated (`heap_ignore
+[fmap eval_key_loc]` plus the usual `extract_loc`/`ss_index_loc`
+bookkeeping conjuncts).
+
+**The one remaining branch is exactly the one the whole redesign was
+aimed at**: a brand new `ss` whose freshly-assigned index equals `i` —
+the ONE time this can ever happen, for a fixed `i`. There, the LHS
+(`KDF_hyb i`'s "else"/real-PRF branch) samples fresh `prk` and writes
+`extract_loc := setm T ss prk`, while the RHS (`KDF_hyb_EVAL i`
+composed with `EVAL true`) instead calls the imported `eval`, which
+samples into `eval_key_loc` and never touches `extract_loc` for this
+(or any later) query. From this point on, `extract_loc`'s LHS and RHS
+copies **permanently, genuinely differ** (the LHS map gets an entry at
+this one `ss`; the RHS map never will) — so `heap_ignore [fmap
+eval_key_loc]`, which claims `extract_loc` agrees as a WHOLE map on
+both sides forever, becomes false exactly at this step. This is a
+structural fact about the redesign, not a proof-search failure — no
+amount of tactic cleverness closes a false invariant.
+
+**The fix (diagnosed, not yet carried out)**: exclude `extract_loc` from
+the `heap_ignore` set and add a fifth invariant conjunct recording the
+weaker fact that actually holds:
+```coq
+rel_app [:: (lhs, ss_index_loc); (lhs, extract_loc); (rhs, extract_loc)]
+  (fun SIdx T T' => forall ss0, SIdx ss0 <> Some i -> T ss0 = T' ss0)
+```
+i.e. the two copies of `extract_loc` agree pointwise at every `ss0`
+*except possibly* the one (at most one, ever) with index exactly `i`.
+The newly-discovered-`ss`-at-`i` branch re-establishes this easily
+(its own hypothesis excludes the very key that changed). The knock-on
+cost: every OTHER branch currently reading `extract_loc` via the
+convenient shared `r_get_vs_get_remember` (which demands a single
+`ProvenBy (syncs extract_loc) _`, i.e. literal map equality) needs
+redoing with `r_get_remember_lhs` + `r_get_remember_rhs` separately,
+deriving the needed per-key equality from the new conjunct instead
+(trivial when the queried `ss'` provably has index `<> i`, which every
+such branch already establishes via its own case split). Mechanical,
+but touches the whole case tree, not a small patch.
+
+**`KDF_hyb_KDF_hyb_EVAL_false_equiv`** (composing `KDF_hyb_EVAL i` with
+`EVAL false` instead — the mirror-image lemma needed for the "ideal"
+half of the hybrid step, matching `PRFPRG.v`'s `GEN_GEN_HYB_EVAL_equiv`)
+is blocked by exactly the same root cause (there: the LHS's `eval` call
+samples into `eval_key_loc` while the RHS's real-Extract branch would
+have sampled into `extract_loc` instead, for that one `ss`).
+
+**`COUNT_KDF_hyb_q_KDF_mid_equiv`** (`AdvantageE (COUNT q ∘ KDF_hyb q)
+(COUNT q ∘ KDF_mid) A = 0` — the fact that past the `q`-th distinct
+shared secret, `KDF_hyb q` and `KDF_mid` agree exactly, no probability
+reasoning needed) is a *different* remaining gap: it needs the same
+adversary-code-induction technique `Pr_bad_adv_bound` (Section 10a)
+already carries out for the birthday step — tracking `count_loc`/
+`ss_count_loc` together through `code_link` to show a `COUNT
+q`-bounded adversary can trigger `get_ss_idx`'s fresh-index branch at
+most `q` times total, hence every `idx` ever handed out is `< q`, hence
+`KDF_hyb q` never takes its "idx >= q" branch. Not yet carried out, but
+should follow `Pr_bad_adv_bound`'s established pattern closely.
+
+`Print Assumptions security_of_KDF` confirms these are the ONLY 3
+non-standard dependencies of the entire top-level theorem.
+
+## 12. Immediate next steps (where to resume)
+
+1. **Rework `KDF_hyb_EVAL_inv`** per the diagnosed fix in Section 11
+   (drop `extract_loc` from `heap_ignore`, add the "agree except
+   possibly at index `i`" conjunct), then redo
+   `KDF_hyb_KDF_hyb_EVAL_true_equiv`'s case tree against the new
+   invariant (mechanical but touches every branch, not just the
+   previously-blocked one).
+2. **`KDF_hyb_KDF_hyb_EVAL_false_equiv`**: same invariant rework,
+   mirroring `PRFPRG.v`'s `GEN_GEN_HYB_EVAL_equiv` for the proof
+   technique.
+3. **`COUNT_KDF_hyb_q_KDF_mid_equiv`**: an adversary-code induction
+   mirroring `Pr_bad_adv_bound`'s technique (Section 10a), tracking
+   `count_loc` and `ss_count_loc` together.
+4. Once all three are `Qed`'d, `KDF_real_KDF_mid_bound` and
+   `security_of_KDF` become unconditional (they're already assembled
+   and `Qed`'d modulo exactly these three facts) — at that point the
+   entire multi-month effort (up-to-bad infrastructure, the birthday
+   bound, and the dynamic-key hybrid argument) is complete, and the
+   standing "don't commit yet" instruction can finally be revisited.
+
+## 13. Session 2026-07-25: all gaps closed — zero admits in HKDF.v
+
+Both remaining `Admitted`s are gone; `security_of_KDF` is now
+unconditional (modulo the library's pre-existing
+`__admitted__interchange_psum` in `pkg_upto_bad.v` and the standard
+`Axioms.v`/mathcomp-analysis axioms — re-confirmed by
+`Print Assumptions` on both `security_of_KDF` and
+`KDF_real_KDF_mid_bound`).
+
+**`COUNT_KDF_hyb_q_KDF_mid_equiv`: proved, and Section 11/12's
+diagnosis was wrong in a useful way.** No adversary-code induction is
+needed: the `COUNT` wrapper *materializes* the run-length in the heap
+as `count_loc`, so a per-call `eq_rel_perf_ind` invariant suffices —
+`heap_ignore [ss_count_loc; ss_index_loc] ⋊ rel_app` carrying
+`ss_count_loc <= count_loc` plus "every stored index < ss_count_loc"
+(`KDF_hyb_q_mid_inv`). One subtlety: the fresh-`ss` branch needs the
+*transient* pre-increment bound, carried as an explicit existential
+plus standalone `preserve_update_mem` step lemmas
+(`KDF_hyb_q_mid_inv_count_step` / `_fresh_ss_step`), because
+`ssprove_restore_mem`'s folding only recognizes `rem_lhs`/`rem_rhs`
+shapes. Helper: `COUNT_KDF_hyb_q_KDF_mid_perf`.
+
+**`KDF_hyb_KDF_hyb_EVAL_false_equiv`: deleted, not proved — it was
+FALSE as stated** (the counterexample analysis is retained as the long
+docstring above `get_prk_bad`). Section 12's plan 2 (invariant rework
+mirroring `GEN_GEN_HYB_EVAL_equiv`) cannot work: no invariant fixes a
+false statement. Instead the EVAL-false leg of each hybrid hop is now
+an **up-to-bad step**, replaying the step-2b/2c recipe per hop:
+
+- `get_prk_bad` = `get_prk` + `KDF_mid'`'s verbatim
+  `used_prk_loc`/`bad_loc` collision bookkeeping (bad_id 4 reused).
+- `KDF_hyb_bad j` = instrumented `KDF_hyb j`;
+  `KDF_hybE_bad i` = monolithic inlining of
+  `KDF_hyb_EVAL i ∘ EVAL false` whose `idx == i` branch ghost-extracts
+  the index-`i` `ss` (output-dead, but keeps both sides' bookkeeping
+  identical — the key trick that lets `bad_loc` stay synced across the
+  EVAL abstraction boundary).
+- Chain per hop: `KDF_hybE_bad_equiv` (perfect, invariant
+  `hybE_inline_inv` incl. "unindexed ⇒ unextracted") →
+  `KDF_hybE_bad_KDF_hyb_bad_bound` (Fundamental Lemma via
+  `KDF_hybE_bad_eq_up_to_bad`, invariant `KDF_hybE_bad_inv`:
+  `heap_ignore [mid_loc; eval_tbl_loc]` only — all shared bookkeeping
+  stays *equal* even post-bad, so the whole per-call proof is one
+  coupled walk, no independent/lossless coupling anywhere; the gated
+  `rel_app` carries `hyb_tbl_match` linking `eval_tbl_loc` to the
+  `(prk_i, ·)` slice of the RHS `mid_loc`) → `KDF_hyb_bad_KDF_hyb_equiv`
+  (ghost erasure). Assembled as `KDF_hyb_EVAL_false_bound`:
+  `AdvantageE (KDF_hyb_EVAL i ∘ EVAL false) (KDF_hyb i.+1) A
+   <= Pr_bad (A ∘ KDF_hybE_bad i) 4 true`.
+- Counting: `Pr_bad_adv_bound_hybE` (mirror of `Pr_bad_adv_bound`,
+  factored via generic `Hprk`/`Hmid`/`Heval` continuation facts;
+  needed `setoid_rewrite bind_assoc` to reassociate under `raw_code`
+  binders) → `Pr_bad_COUNT_KDF_hybE_bad_bound`:
+  per hop `<= birthday_bound q` under `COUNT q`.
+
+**Final theorem (new shape):**
+```coq
+AdvantageE (COUNT q ∘ KDF_real) (COUNT q ∘ KDF_ideal) A <=
+  (\sum_(i < q) prf_epsilon ((A ∘ COUNT q) ∘ KDF_hyb_EVAL i))
+  + q%:R * birthday_bound q   (* per-hop up-to-bad, coarse event *)
+  + birthday_bound q.         (* step-2 birthday, unchanged *)
+```
+Deliberate looseness: the per-hop bad event is the COARSE "any Extract
+collision" (maximal reuse of the KDF_bad machinery), costing
+`q * birthday_bound q` = Θ(q³/N). Two documented tightening options,
+decided against for this pass (user chose coarse):
+(a) restrict the event to "collides with prk_i" → Θ(q²/N) explicit
+term, at the cost of a bespoke two-phase counting induction;
+(b) re-index hybrids per-`ss` (per-ss ideal tables) → *perfect* hops,
+no explicit birthday term at all (the q²/N migrates inside the
+reductions' `prf_epsilon` via key-collision testing), but takes
+`KDF_mid`/`KDF_bad`/Birthday off the main path.
+
+Proof-engineering notes that materially helped (beyond
+`ROCQ_MCP_SESSION_NOTES.md`): residual `x ← ret v ;; k` after `case:`
+on a `getm` match needs a bare `simpl.` per branch per side;
+`r_put_lhs/rhs` preconditions must be literal `fun '(a,b) => …`
+pair-patterns (reshape via `rpre_weaken_rule`); reassemble `⋊`-stacked
+invariants with `split`, never `conj` (`simpl never`); factoring
+repeated per-branch arguments into standalone step/"dance" lemmas
+(`KDF_hybE_bad_prk_dance`/`_mid_dance`/`_owner_dance`) beats literal
+transcription — the eq-up-to-bad proof landed at ~758 lines + helpers.
+
+File: 7397 lines, compiles clean under `make -f Makefile.rocq`,
+`grep Admitted\.|admit\.` returns nothing. Not yet committed (standing
+instruction); ready for commit review.
