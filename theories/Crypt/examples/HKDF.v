@@ -22,9 +22,10 @@
   [PRK_N], collisions happen with probability at most roughly
   [q^2 / (2 * PRK_N)].
 
-  PROOF ROADMAP (this file lays out the games and the shape of the final
-  bound; a handful of mechanical/mirror lemmas are left as [Admitted]
-  below -- see the grep-able list at the end of this comment):
+  PROOF ROADMAP (the development is COMPLETE: every lemma in this file
+  is [Qed]'d -- no [Admitted], no [admit], no [Axiom]; the only axioms
+  involved are SSProve's ambient ones, cf. [Print Assumptions
+  security_of_KDF]):
 
     KDF_real                     -- Extract (RO) + Expand (real PRF)
        |  hybrid over the <= q distinct SHARED SECRETS Extract has seen;
@@ -63,15 +64,18 @@
       + birthday_bound q.           (* step 2's own up-to-bad argument *)
 
   Both [KDF_real_KDF_mid_bound] (step 1) and [KDF_mid_KDF_ideal_bound]
-  (step 2) are now fully assembled/[Qed]'d, modulo a handful of
-  mechanical mirror lemmas left [Admitted] for readability of the
-  overall proof structure (each has a docstring pointing at the sibling
-  lemma it mirrors): [KDF_hyb_bad_KDF_hyb_equiv], [KDF_hybE_bad_equiv],
+  (step 2) are fully assembled and [Qed]'d, INCLUDING the once-open
+  mirror lemmas ([KDF_hyb_bad_KDF_hyb_equiv], [KDF_hybE_bad_equiv],
   [KDF_hybE_bad_bad_preserved], [KDF_hyb_bad_bad_preserved],
-  [KDF_hybE_bad_Invariant], [KDF_hybE_bad_eq_up_to_bad], and
-  [Pr_bad_adv_bound_hybE] (this last one mirroring [Pr_bad_adv_bound],
-  the one substantial induction-on-adversary-code argument the birthday
-  step needs -- see its own docstring).
+  [KDF_hybE_bad_Invariant], [KDF_hybE_bad_eq_up_to_bad]) and both
+  counting kernels [Pr_bad_adv_bound] / [Pr_bad_adv_bound_hybE] (the
+  substantial induction-on-adversary-code arguments the birthday steps
+  need -- see their docstrings; earlier revisions of this header listed
+  some of these as [Admitted], which is no longer the case).
+
+  [security_of_KDF] is reused as a black box by HPKE.v / HPKE_HKDF.v
+  (this directory): there, [COUNT q ∘ KDF b] instantiates the abstract
+  KDF core of an HPKE-style 3-hop composition.
 *)
 
 From SSProve.Relational Require Import OrderEnrichedCategory GenericRulesSimple.
@@ -2525,11 +2529,16 @@ Section HKDF_example.
       apply: (KDF_hyb_EVAL_inv_fresh_couple_step _ _ _ _ _ _ _ _ Hinv HSI0 HSI1 Hcnt0 Hcnt1 HT0eq Hidx Hcnti).
   Qed.
 
-  (** STATUS: this statement is FALSE as written, not merely hard to
-    prove -- see the concrete counterexample below. It is intentionally
-    left [Admitted] rather than forced through with a broken proof.
+  (** HISTORICAL NOTE (kept as documentation): an earlier draft of this
+    file stated a lemma [KDF_hyb_KDF_hyb_EVAL_false_equiv] here, claiming
+    a perfect [≈₀] equivalence for the EVAL-false leg of the hybrid hop.
+    That statement was FALSE, not merely hard to prove -- see the
+    concrete counterexample below -- and the lemma has been REMOVED,
+    replaced by the per-hop up-to-bad treatment introduced right after
+    this comment. The analysis is kept because it explains WHY the
+    up-to-bad detour (and its [q * birthday_bound q] cost) exists.
 
-    At first glance this looks like the mirror image of
+    At first glance the removed claim looks like the mirror image of
     [KDF_hyb_KDF_hyb_EVAL_true_equiv]: composing [KDF_hyb_EVAL i] with
     the *ideal* oracle [EVAL false] instead of [EVAL true], hoping that
     [eval_tbl_loc]'s lazily-sampled table reproduces exactly what
@@ -4666,14 +4675,13 @@ Section HKDF_example.
           Tev TmR prk y Hinv0 Hbad erefl erefl HTev HTmR HTss0 HSeq HeqL HeqR).
   Qed.
 
-  (* TODO (still open): full proof plan below is verified to WORK for the
-    "idx < i, ss already extracted" leaf (interactively reconstructed and
-    confirmed to Qed, see the recipe below); the remaining ~7 leaves follow
-    the SAME two moves (a diagonal walk through the [get_prk_bad]-shaped
-    code, closed by [KDF_hybE_bad_inv_extract_fresh_step] /
-    [KDF_hybE_bad_inv_mid_step] / [KDF_hybE_bad_inv_owner_step] /
-    the bad_true_* one-sided lemmas) but were not yet assembled into one
-    script within the session budget. Recipe, precisely:
+  (* READING GUIDE for the proof of [KDF_hybE_bad_eq_up_to_bad] below
+    (now fully Qed'd; this recipe was the plan it was assembled from and
+    is kept as a map of the script): every leaf is the SAME two moves --
+    a diagonal walk through the [get_prk_bad]-shaped code, closed by
+    [KDF_hybE_bad_inv_extract_fresh_step] / [KDF_hybE_bad_inv_mid_step] /
+    [KDF_hybE_bad_inv_owner_step] / the bad_true_* one-sided lemmas.
+    Recipe, precisely:
 
     Opening (shared by everything below):
       move=> id S T x hasE. fmap_invert hasE. simplify_linking.
@@ -4750,8 +4758,8 @@ Section HKDF_example.
       RHS, composed sequentially, NOT via the retired 4-param
       KDF_hybE_bad_inv_bad_true_step).
 
-    - [else] (idx > i, no table, NOT YET DONE but should be the EASIEST
-      leaf): both sides run `... ret (PRF info a)` verbatim identically;
+    - [else] (idx > i, no table -- the easiest leaf): both sides run
+      `... ret (PRF info a)` verbatim identically;
       couple get_prk_bad diagonally (extract_fresh_step / trivial-Some, no
       bad-casing needed at all since there is no table read -- outputs
       `PRF info a = PRF info a` unconditionally), finish with r_ret.
@@ -4774,10 +4782,10 @@ Section HKDF_example.
 
     All 8 supporting lemmas above (index_step, extract_fresh_step,
     mid_step, owner_step, bad_true_step, bad_true_lhs_mid_step,
-    bad_true_rhs_mid_step, bad_true_lhs_eval_step) are already proved to
-    Qed and are exactly what every leaf above calls -- this admit is pure
-    proof-script assembly + the two intro-pattern/precond gotchas
-    documented above, not missing mathematics. *)
+    bad_true_rhs_mid_step, bad_true_lhs_eval_step) are Qed'd and are
+    exactly what every leaf calls -- the proof script below is precisely
+    this assembly, plus the two intro-pattern/precond gotchas documented
+    above. *)
   Lemma KDF_hybE_bad_eq_up_to_bad i :
     eq_up_to_bad DERIVE_export (KDF_hybE_bad_inv i) 4
       (KDF_hybE_bad i) (KDF_hyb_bad i.+1).
@@ -6161,19 +6169,19 @@ Section HKDF_example.
          applied to this file's [KDF_mid'_bad_inv]; the reusable pieces
          ([eq_upto_bad_perf_ind], [Pr_bad]) now live in [pkg_upto_bad.v].
 
-    (2c) TODO: Pr_bad (A ∘ COUNT q ∘ KDF_mid') 4 true <= birthday_bound q
-         (equivalently, [<= bad_bound q 0], which is <= [birthday_bound q]
-         by trivial arithmetic). The pure combinatorics already exist --
-         [Birthday.v]'s [bad_dist_bound] -- but connecting it to this
-         package's actual run semantics is still open: it requires
+    (2c) DONE ([Pr_bad_COUNT_KDF_mid'_bound] below, via
+         [Pr_bad_adv_bound]): Pr_bad (A ∘ COUNT q ∘ KDF_mid') 4 true
+         <= birthday_bound q (equivalently, [<= bad_bound q 0], which is
+         <= [birthday_bound q] by trivial arithmetic). The pure
+         combinatorics are [Birthday.v]'s [bad_dist_bound]; the
+         connection to the package's actual run semantics is
+         [Pr_bad_adv_bound] -- an induction over the adversary's code
          showing that running (an arbitrary, [COUNT q]-bounded adversary
          composed with) [KDF_mid'] can only set [bad_loc] as often as
          [q] adaptively-chosen draws from a size-[PRK_N] space can
-         collide, i.e. a stochastic-domination/coupling argument between
-         [Pr_op (A ∘ COUNT q ∘ KDF_mid') RUN tt empty_heap] and
-         [bad_dist q emptyset], since a repeat [ss] query costs no fresh
-         sample (so the *distinct*-sample count driving real collisions
-         is <= the [COUNT]-bounded *total* query count [q], never more).
+         collide (a repeat [ss] query costs no fresh sample, so the
+         *distinct*-sample count driving real collisions is <= the
+         [COUNT]-bounded *total* query count [q], never more).
   *)
 
   (* --- (1)/(2): pushing [COUNT q] through a perfect ([≈₀]) equivalence ---
@@ -7305,11 +7313,10 @@ Section HKDF_example.
     (all composed with [COUNT q]): the two outer legs are EXACT
     ([COUNT_KDF_mid_KDF_mid'_bound]/[COUNT_KDF_bad_KDF_ideal_bound], cost
     0), and the middle leg is exactly [COUNT_KDF_mid'_KDF_bad_bound]
-    followed by [Pr_bad_COUNT_KDF_mid'_bound] -- the ONE genuinely open
-    gap left in this file (see its docstring immediately above). Every
-    other lemma feeding into this proof is fully [Qed]'d with 0 admits;
-    this theorem itself is a complete, mechanical assembly modulo that
-    single isolated fact. *)
+    followed by [Pr_bad_COUNT_KDF_mid'_bound] (once the one open gap in
+    this file, now fully [Qed]'d via [Pr_bad_adv_bound] -- see its
+    docstring immediately above). Every lemma feeding into this proof is
+    fully [Qed]'d with 0 admits. *)
   Theorem KDF_mid_KDF_ideal_bound LA A q :
     ValidPackage LA DERIVE_export A_export A →
     fseparate LA KDF_mid_locs →
