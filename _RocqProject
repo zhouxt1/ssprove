@@ -111,6 +111,9 @@ theories/Crypt/examples/Birthday.v
 theories/Crypt/examples/HKDF.v
 theories/Crypt/examples/OTP.v
 theories/Crypt/examples/KEMDEM.v
+theories/Crypt/examples/KEMDEM_qbound.v
+theories/Crypt/examples/HPKE.v
+theories/Crypt/examples/HPKE_HKDF.v
 theories/Crypt/examples/RandomOracle.v
 theories/Crypt/examples/SigmaProtocol.v
 theories/Crypt/examples/Schnorr.v
